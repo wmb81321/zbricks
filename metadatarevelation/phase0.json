@@ -1,0 +1,42 @@
+{
+"name": "Luxury Villa #1 - Location Revealed",
+"description": "Progressive auction: Phase 0 reveals location and lot details. Interior layout and amenities to be revealed in upcoming phases.",
+"image": "ipfs://QmPhase0/aerial-lot.jpg",
+"external_url": "https://yourauction.com/villa-1",
+"animation_url": "ipfs://QmPhase0/drone-footage.mp4",
+"attributes": [
+{ "trait_type": "Reveal Phase", "value": 0, "display_type": "number" },
+{ "trait_type": "Revealed", "value": "30%" },
+{ "trait_type": "Status", "value": "Bidding Active" },
+{ "trait_type": "Country", "value": "Colombia" },
+{ "trait_type": "State", "value": "Valle del Cauca" },
+{ "trait_type": "City", "value": "Cali" },
+{ "trait_type": "Neighborhood", "value": "Normandia" },
+{ "trait_type": "Zone", "value": "Residential" },
+{ "trait_type": "Lot Size", "value": "1,000 m²", "display_type": "number" },
+{ "trait_type": "Orientation", "value": "North-facing" },
+{ "trait_type": "Topography", "value": "Flat" },
+{ "trait_type": "View", "value": "Mountain view" }
+],
+"media": {
+"neighborhood_map": "ipfs://QmPhase0/map.png",
+"lot_plan": "ipfs://QmPhase0/lot-plan.pdf",
+"drone_video": "ipfs://QmPhase0/drone.mp4"
+},
+"properties": {
+"auction": {
+"phase": 0,
+"bidding_open": true,
+"phase_ends": "2026-02-08T12:00:00Z",
+"floor_price": 500000
+},
+"revealed": {
+"location": true,
+"lot_details": true,
+"interior_layout": false,
+"amenities": false,
+"legal_docs": false
+},
+"next_reveal": "Interior layout: bedrooms, bathrooms, living areas"
+}
+}

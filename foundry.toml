@@ -2,5 +2,24 @@
 src = "src"
 out = "out"
 libs = ["lib"]
+remappings = [
+    "@openzeppelin/contracts/=lib/openzeppelin-contracts/contracts/",
+]
+
+# Optimizer settings
+optimizer = true
+optimizer_runs = 200
+
+# RPC URLs
+[rpc_endpoints]
+base_sepolia = "${BASE_SEPOLIA_RPC_URL}"
+base = "${BASE_RPC_URL}"
+
+# Etherscan API keys for verification
+[etherscan]
+base-sepolia = { key = "${BASESCAN_API_KEY}" }
+base = { key = "${BASESCAN_API_KEY}" }
+
+# Note: Foundry automatically uses the correct Basescan endpoints for Base chains
 
 # See more config options https://github.com/foundry-rs/foundry/blob/master/crates/config/README.md#all-options

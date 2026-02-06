@@ -1,0 +1,117 @@
+{
+"name": "Luxury Villa #1 - Complete Property",	
+"description": "Progressive auction complete: All property details, legal documentation, and warranties revealed. Ready for finalization.",	
+"image": "ipfs://QmPhase3/complete-hero.jpg",	
+"external_url": "https://yourauction.com/villa-1",	
+"animation_url": "ipfs://QmPhase3/complete-tour.mp4",	
+	
+"attributes": [
+{ "trait_type": "Reveal Phase", "value": 3, "display_type": "number" },
+{ "trait_type": "Revealed", "value": "100%" },
+{ "trait_type": "Status", "value": "Sold" },
+{ "trait_type": "Country", "value": "Colombia" },	
+{ "trait_type": "State", "value": "Valle del Cauca" },	
+{ "trait_type": "City", "value": "Cali" },
+{ "trait_type": "Neighborhood", "value": "Normandia" },
+{ "trait_type": "Zone", "value": "Residential" },
+{ "trait_type": "Lot Size", "value": "1,000 m²", "display_type": "number" },
+{ "trait_type": "Orientation", "value": "North-facing" },
+{ "trait_type": "Topography", "value": "Flat" },
+{ "trait_type": "View", "value": "Mountain view" },
+{ "trait_type": "Address", "value": "Calle 10 #23-45" },	
+{ "trait_type": "Total Living Area", "value": "450 m²", "display_type": "number" },
+{ "trait_type": "Levels", "value": 3, "display_type": "number" },
+{ "trait_type": "Bedrooms", "value": 5, "display_type": "number" },
+{ "trait_type": "Bathrooms", "value": 6, "display_type": "number" },
+{ "trait_type": "Half Baths", "value": 2, "display_type": "number" },
+{ "trait_type": "Kitchen Type", "value": "Open Concept" },
+{ "trait_type": "Living Rooms", "value": 2, "display_type": "number" },
+{ "trait_type": "Dining Areas", "value": 1, "display_type": "number" },
+{ "trait_type": "Balconies", "value": 3, "display_type": "number" },
+{ "trait_type": "Study/Office", "value": "Yes" },
+{ "trait_type": "Pool Type", "value": "Infinity" },	
+{ "trait_type": "Pool Size", "value": "60 m²", "display_type": "number" },
+{ "trait_type": "Gym", "value": "Private Equipped" },
+{ "trait_type": "Parking", "value": "4 Cars", "display_type": "number" },
+{ "trait_type": "Cinema", "value": "Private Theater" },
+{ "trait_type": "Wine Cellar", "value": "Climate Controlled" },
+{ "trait_type": "BBQ Area", "value": "Covered Outdoor" },
+{ "trait_type": "Garden", "value": "Landscaped" },
+{ "trait_type": "Social Area", "value": "Terrace + Lounge" },
+{ "trait_type": "Smart Home", "value": "Full Automation" },
+{ "trait_type": "Security System", "value": "24/7 Monitoring" },
+{ "trait_type": "Solar Panels", "value": "Yes" },
+{ "trait_type": "Water Treatment", "value": "Filtration System" },
+{ "trait_type": "Year Built", "value": 2023, "display_type": "number" },	
+{ "trait_type": "Property ID", "value": "COL-VDC-CALI-001" },
+{ "trait_type": "Legal Status", "value": "Clear Title" },
+{ "trait_type": "Zoning", "value": "Residential - R1" },
+{ "trait_type": "Property Tax/Year", "value": "12,000,000 COP" },
+{ "trait_type": "HOA Fees/Month", "value": "500,000 COP" },
+{ "trait_type": "Warranty", "value": "10 Years Structural" },
+{ "trait_type": "Utilities", "value": "All Connected" },
+{ "trait_type": "Internet", "value": "Fiber 1Gbps" },
+{ "trait_type": "Energy Rating", "value": "A+" },
+{ "trait_type": "Nearby Parks", "value": "3 within 1km" },
+{ "trait_type": "Schools", "value": "International School 2km" },
+{ "trait_type": "Shopping", "value": "Mall 1.5km" }
+],	
+	
+"media": {
+"neighborhood_map": "ipfs://QmPhase0/map.png",
+"lot_plan": "ipfs://QmPhase0/lot-plan.pdf",
+"drone_video": "ipfs://QmPhase0/drone.mp4",
+"floor_plans": "ipfs://QmPhase1/floor-plans.pdf",	
+"interior_images": [
+"ipfs://QmPhase1/living-room.jpg",
+"ipfs://QmPhase1/kitchen.jpg",
+"ipfs://QmPhase1/master-bedroom.jpg",
+"ipfs://QmPhase1/bathroom.jpg"
+],
+"3d_walkthrough": "ipfs://QmPhase1/walkthrough.mp4",
+"amenity_images": [
+"ipfs://QmPhase2/pool.jpg",
+"ipfs://QmPhase2/gym.jpg",
+"ipfs://QmPhase2/cinema.jpg",
+"ipfs://QmPhase2/wine-cellar.jpg",
+"ipfs://QmPhase2/bbq-area.jpg"
+],
+"smart_home_demo": "ipfs://QmPhase2/automation.mp4",
+"legal_documents": "ipfs://QmPhase2/legal-docs.pdf",
+"property_deed": "ipfs://QmPhase2/deed.pdf",
+"warranties": "ipfs://QmPhase2/warranties.pdf",
+"certificates": "ipfs://QmPhase2/certificates.pdf",
+"complete_photo_gallery": "ipfs://QmPhase2/gallery/",
+"virtual_tour_360": "ipfs://QmPhase2/tour360.html"
+},	
+	
+	
+	
+	
+	
+"properties": {
+"auction": {
+"phase": 3,
+"bidding_open": false,
+"auction_finalized": true,
+"floor_price": 500000,
+"highest_bid": 550000,
+"bidder_lead": "0x1234...abcd"
+},
+"revealed": {
+"location": true,
+"lot_details": true,
+"interior_layout": true,
+"amenities": true,
+"legal_docs": true
+},
+"final_details": {
+"ready_for_transfer": true,
+"escrow_ready": true,
+"inspections_complete": true,
+"owner": "0x5678",
+"final_price": 550000,
+"sold_on": "2026-02-15T12:00:00Z"
+}
+}
+}	

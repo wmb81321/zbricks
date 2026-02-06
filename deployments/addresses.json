@@ -1,0 +1,11 @@
+{
+  "84532": {
+    "chainId": 84532,
+    "chainName": "Base Sepolia",
+    "timestamp": "2026-02-06T12:39:36.889Z",
+    "contracts": {
+      "HouseNFT": "0x7ea51d8855ba98c6167f71d272813faba1244a0c",
+      "AuctionManager": "0xe6afb32fdd1c03edd3dc2f1b0037c3d4580d6dca"
+    }
+  }
+}
