@@ -241,36 +241,70 @@ constructor(
     uint256[4] memory _phaseDurations,
     uint256 _floorPrice,
     uint256 _minBidIncrementPercent,
-    bool _enforceMinIncrement
+    bool _enforceMinIncrement,
+    uint256 _participationFee,
+    address _treasury
 ) Ownable(_initialOwner)
 ```
 
-**Description**: Initializes a Continuous Clearing Auction for a single NFT.
+**Description**: Initializes a Continuous Clearing Auction for a single NFT with participation fee and treasury.
 
 **Parameters:**
 - `_initialOwner`: Owner address with control privileges
 - `_paymentToken`: Payment token contract address (e.g., USDC, DAI)
 - `_nftContract`: NFT contract address being auctioned
 - `_tokenId`: Token ID of the NFT (must already be owned by this contract)
-- `_phaseDurations`: Array of 4 phase durations (each must be >= 1 day)
+- `_phaseDurations`: Array of 3 phase durations in seconds (each must be > 0)
 - `_floorPrice`: Minimum first bid amount (e.g., 1000000000 = 1,000 USDC)
 - `_minBidIncrementPercent`: Minimum bid increment percentage (1-100, e.g., 5 = 5%)
 - `_enforceMinIncrement`: Whether to enforce the minimum increment
+- `_participationFee`: One-time fee to participate (can be 0, sent to treasury)
+- `_treasury`: Address that receives participation fees and winning bid (cannot be address(0))
 
 **Requirements:** 
 - NFT must be owned by this contract before deployment
-- Each phase duration must be >= 1 day
+- Each phase duration must be > 0 seconds (no minimum)
+- Treasury address cannot be zero address
 - Contract validates NFT ownership in constructor
 
 **Example:**
 ```solidity
-uint256[4] memory durations = [1 days, 1 days, 1 days, 0]; // 3 bidding phases
+uint256[4] memory durations = [86400, 86400, 86400, 0]; // 3 phases of 1 day each
 AuctionManager auction = new AuctionManager(
     ownerAddress,
     usdcAddress,
     nftAddress,
     1,                    // tokenId
     durations,
+    1000000000,          // 1,000 USDC floor price
+    5,                   // 5% increment
+    true,                // Enforce increment
+    10000000,            // 10 USDC participation fee
+    treasuryAddress      // Treasury receives fees and winning bid
+);
+```    {
+      "name": "123 Main Street - Complete Information",
+      "description": "All property information revealed. Final bidding phase active.",
+      "image": "ipfs://QmPhase2Image/complete.jpg",
+      "external_url": "https://zbrick.io/auction/1",
+      "animation_url": "ipfs://QmPhase2Video/walkthrough.mp4",
+      "attributes": [
+        {"trait_type": "Address", "value": "123 Main Street"},
+        {"trait_type": "City", "value": "Springfield"},
+        {"trait_type": "State", "value": "IL"},
+        {"trait_type": "Square Feet", "value": "2000"},
+        {"trait_type": "Year Built", "value": "2015"},
+        {"trait_type": "Appraised Value", "value": "$350,000"},
+        {"trait_type": "Monthly Rental Income", "value": "$2,500"},
+        {"trait_type": "Property Tax", "value": "$4,200/year"},
+        {"trait_type": "HOA Fees", "value": "$0"},
+        {"trait_type": "Condition", "value": "Excellent"},
+        {"trait_type": "Phase", "value": "Phase 2"},
+        {"trait_type": "Status", "value": "Final Bidding"},
+        {"trait_type": "Phase 1 Winner", "value": "0xabcd...ef01"},
+        {"trait_type": "Phase 1 High Bid", "value": "7500 USDC"}
+      ]
+    }s,
     1000000000,          // 1,000 USDC floor price
     5,                   // 5% increment
     true                 // Enforce increment
@@ -286,6 +320,8 @@ uint256 public immutable tokenId;
 uint256 public immutable floorPrice;
 uint256 public immutable minBidIncrementPercent;
 bool public immutable enforceMinIncrement;
+uint256 public immutable participationFee;     // One-time fee to participate
+address public immutable treasury;              // Receives fees and winning bid
 
 uint8 public currentPhase;           // Current phase (0-2)
 address public currentLeader;        // Current highest bidder
@@ -294,6 +330,8 @@ address public winner;               // Winner (set upon finalization)
 bool public finalized;               // Whether auction is finalized
 
 mapping(address => uint256) public userBids;  // Total cumulative bid per user
+mapping(address => bool) public hasPaid;      // Tracks who paid participation fee
+uint256 public totalParticipationFees;        // Total fees collected
 mapping(uint8 => PhaseInfo) public phases;    // Phase information
 
 struct PhaseInfo {
@@ -312,7 +350,7 @@ struct PhaseInfo {
 function placeBid(uint256 amount) external whenNotPaused nonReentrant
 ```
 
-**Description**: Places an incremental bid - adds to your existing bid rather than replacing it. Users can bid multiple times.
+**Description**: Places an incremental bid - adds to your existing bid rather than replacing it. On your first bid, also charges a one-time participation fee (if configured).
 
 **Access**: Public  
 **Parameters:**
@@ -324,23 +362,28 @@ function placeBid(uint256 amount) external whenNotPaused nonReentrant
 - Amount > 0
 - Your new total bid (userBids[you] + amount) >= floor price
 - If enforceMinIncrement is true and you're not current leader: new total bid >= currentHighBid * (1 + minBidIncrementPercent/100)
-- User has approved payment token transfer
+- User has approved payment token transfer for (amount + participationFee if first bid)
 
 **How it works:**
-1. Your new total bid = existing userBids[you] + amount
-2. Contract transfers `amount` tokens from you
-3. Leader is recalculated across all bidders
-4. Only the final winner pays - losers can withdraw
+1. **First bid only**: If participationFee > 0 and you haven't paid yet, transfers participation fee to treasury (non-refundable)
+2. Your new total bid = existing userBids[you] + amount
+3. Contract transfers `amount` tokens from you to contract
+4. Leader is recalculated across all bidders
+5. Emits ParticipationFeePaid event on first bid (if fee > 0)
+6. Only the final winner pays - losers can withdraw their bid (not the fee)
 
 **Example:**
 ```solidity
-// 1. Approve USDC
-IERC20(paymentToken).approve(auctionAddress, 5000000000); // 5,000 USDC
+// Assuming participationFee = 10 USDC (10000000)
+// First bid: Approve bid + fee
+IERC20(paymentToken).approve(auctionAddress, 5010000000); // 5,010 USDC
+auction.placeBid(5000000000); // 5,000 USDC bid
+// Automatically charges 10 USDC fee to treasury
+// userBids[you] = 5,000 USDC (fee not included in bid amount)
+// hasPaid[you] = true
 
-// 2. Place initial bid
-auction.placeBid(5000000000); // userBids[you] = 5,000 USDC
-
-// 3. Increase your bid later
+// Later, increase your bid (no additional fee)
+IERC20(paymentToken).approve(auctionAddress, 2000000000); // 2,000 USDC
 auction.placeBid(2000000000); // userBids[you] = 7,000 USDC total
 ```
 
@@ -462,20 +505,51 @@ cast send <AUCTION_ADDRESS> "finalizeAuction()" \
 function withdrawProceeds() external onlyOwner nonReentrant
 ```
 
-**Description**: Allows owner to withdraw winning bid proceeds after finalization.
+**Description**: Allows owner to withdraw winning bid proceeds to treasury after finalization. Participation fees are sent immediately during bidding.
 
 **Access**: Owner only  
 **Requirements:**
 - Auction finalized
 - Winner's bid not yet withdrawn by owner
 
+**Note**: The winning bid is sent to the treasury address configured during construction, not to the owner.
+
 **Example:**
 ```solidity
-auction.withdrawProceeds(); // Owner gets winning bid amount
+auction.withdrawProceeds(); // Sends winning bid to treasury
 ```
 
 ```bash
 cast send <AUCTION_ADDRESS> "withdrawProceeds()" \
+    --private-key $PRIVATE_KEY \
+    --rpc-url base_sepolia
+```
+
+---
+
+#### emergencyWithdrawFunds
+```solidity
+function emergencyWithdrawFunds() external onlyOwner nonReentrant
+```
+
+**Description**: Emergency function to withdraw all payment token funds to owner. Can be called anytime.
+
+**Access**: Owner only  
+**Requirements:**
+- Contract has payment token balance > 0
+
+**Use Cases**:
+- Treasury address issues
+- Contract problems requiring fund recovery
+- Emergency situations
+
+**Example:**
+```solidity
+auction.emergencyWithdrawFunds(); // Sends all funds to owner
+```
+
+```bash
+cast send <AUCTION_ADDRESS> "emergencyWithdrawFunds()" \
     --private-key $PRIVATE_KEY \
     --rpc-url base_sepolia
 ```
@@ -597,6 +671,7 @@ cast call <AUCTION_ADDRESS> "getPhaseInfo(uint8)" 0 --rpc-url base_sepolia
 ```solidity
 event BidPlaced(address indexed bidder, uint256 incrementalAmount, uint256 newTotalBid, uint8 indexed phase);
 event BidWithdrawn(address indexed bidder, uint256 amount, uint8 indexed phase);
+event ParticipationFeePaid(address indexed bidder, uint256 amount, uint8 indexed phase);
 event PhaseAdvanced(uint8 indexed phase, uint256 timestamp);
 event AuctionFinalized(address indexed winner, uint256 amount);
 event ProceedsWithdrawn(uint256 amount);
@@ -628,44 +703,54 @@ constructor() Ownable(msg.sender)
 #### createAuction
 ```solidity
 function createAuction(
+    address _admin,
     address _paymentToken,
     address _nftContract,
     uint256 _tokenId,
     uint256[4] memory _phaseDurations,
     uint256 _floorPrice,
     uint256 _minBidIncrementPercent,
-    bool _enforceMinIncrement
+    bool _enforceMinIncrement,
+    uint256 _participationFee,
+    address _treasury
 ) external onlyOwner returns (address)
 ```
 
-**Description**: Deploys a new independent AuctionManager instance.
+**Description**: Deploys a new independent AuctionManager instance with participation fee and treasury.
 
 **Access**: Owner only  
 **Parameters:**
+- `_admin`: Owner address for the new auction
 - `_paymentToken`: Payment token contract address (e.g., USDC, DAI)
 - `_nftContract`: HouseNFT contract address
 - `_tokenId`: Token ID to auction
-- `_phaseDurations`: Array of 4 phase durations (each >= 1 day)
+- `_phaseDurations`: Array of 3 phase durations in seconds (each must be > 0)
 - `_floorPrice`: Minimum first bid amount
 - `_minBidIncrementPercent`: Min increment percentage (1-100)
 - `_enforceMinIncrement`: Whether to enforce minimum increment
+- `_participationFee`: One-time fee to participate (can be 0)
+- `_treasury`: Address that receives participation fees and winning bid
 
 **Returns**: Address of the newly deployed AuctionManager
 
 **Requirements:**
 - NFT must be owned by the factory before calling (will be transferred to auction)
+- Treasury address cannot be zero address
 
 **Example:**
 ```solidity
-uint256[4] memory durations = [1 days, 1 days, 1 days, 0];
+uint256[4] memory durations = [86400, 86400, 86400, 0]; // 1 day each
 address auction = factory.createAuction(
+    adminAddress,
     usdcAddress,
     nftAddress,
     1,                    // tokenId
     durations,
     1000000000,          // 1,000 USDC floor
     5,                   // 5% increment
-    true                 // Enforce increment
+    true,                // Enforce increment
+    10000000,            // 10 USDC participation fee
+    treasuryAddress      // Treasury receives fees and winning bid
 );
 ```
 
@@ -723,7 +808,15 @@ event AuctionCreated(
     address indexed auctionAddress,
     address indexed nftContract,
     uint256 indexed tokenId,
-    address paymentToken
+    address paymentToken,
+    address admin,
+    uint256[4] phaseDurations,
+    uint256 floorPrice,
+    uint256 minBidIncrementPercent,
+    bool enforceMinIncrement,
+    uint256 participationFee,
+    address treasury,
+    uint256 timestamp
 );
 ```
 

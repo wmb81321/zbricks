@@ -28,6 +28,8 @@ contract AuctionFactory is Ownable {
         uint256 floorPrice,
         uint256 minBidIncrementPercent,
         bool enforceMinIncrement,
+        uint256 participationFee,
+        address treasury,
         uint256 timestamp
     );
     
@@ -43,10 +45,12 @@ contract AuctionFactory is Ownable {
      * @param _paymentToken Payment token contract (e.g., USDC)
      * @param _nftContract NFT contract to auction
      * @param _tokenId Token ID of the NFT (must already be transferred to the new auction address)
-     * @param _phaseDurations Array of 3 phase durations (each >= 1 day)
+     * @param _phaseDurations Array of 3 phase durations in seconds (each must be > 0)
      * @param _floorPrice Minimum first bid amount
      * @param _minBidIncrementPercent Minimum bid increment percentage (1-100)
      * @param _enforceMinIncrement Whether to enforce the minimum increment
+     * @param _participationFee One-time fee to participate (can be 0)
+     * @param _treasury Address that receives participation fees and winning bid
      * @return The address of the newly deployed auction
      */
     function createAuction(
@@ -57,7 +61,9 @@ contract AuctionFactory is Ownable {
         uint256[4] memory _phaseDurations,
         uint256 _floorPrice,
         uint256 _minBidIncrementPercent,
-        bool _enforceMinIncrement
+        bool _enforceMinIncrement,
+        uint256 _participationFee,
+        address _treasury
     ) external onlyOwner returns (address) {
         // Deploy new AuctionManager instance
         AuctionManager newAuction = new AuctionManager(
@@ -68,7 +74,9 @@ contract AuctionFactory is Ownable {
             _phaseDurations,
             _floorPrice,
             _minBidIncrementPercent,
-            _enforceMinIncrement
+            _enforceMinIncrement,
+            _participationFee,
+            _treasury
         );
         
         address auctionAddress = address(newAuction);
@@ -88,6 +96,8 @@ contract AuctionFactory is Ownable {
             _floorPrice,
             _minBidIncrementPercent,
             _enforceMinIncrement,
+            _participationFee,
+            _treasury,
             block.timestamp
         );
         

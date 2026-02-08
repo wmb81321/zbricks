@@ -39,6 +39,12 @@ contract AuctionManager is Ownable, Pausable, ReentrancyGuard, IERC721Receiver {
     /// @notice Whether to enforce minimum bid increment
     bool public immutable enforceMinIncrement;
     
+    /// @notice Participation fee required to place first bid (can be 0)
+    uint256 public immutable participationFee;
+    
+    /// @notice Treasury address that receives participation fees and winning bid
+    address public immutable treasury;
+    
     // ============ Mutable Storage ============
     
     /// @notice Current auction phase (0-2)
@@ -65,6 +71,12 @@ contract AuctionManager is Ownable, Pausable, ReentrancyGuard, IERC721Receiver {
     /// @notice Mapping of bidder address to their total bid amount
     mapping(address => uint256) public userBids;
     
+    /// @notice Tracks whether a bidder has paid the participation fee
+    mapping(address => bool) public hasPaid;
+    
+    /// @notice Total participation fees collected
+    uint256 public totalParticipationFees;
+    
     /// @notice Information for each auction phase
     mapping(uint8 => PhaseInfo) public phases;
     
@@ -82,6 +94,7 @@ contract AuctionManager is Ownable, Pausable, ReentrancyGuard, IERC721Receiver {
     
     event BidPlaced(address indexed bidder, uint256 incrementalAmount, uint256 newTotalBid, uint8 indexed phase);
     event BidWithdrawn(address indexed bidder, uint256 amount, uint8 indexed phase);
+    event ParticipationFeePaid(address indexed bidder, uint256 amount, uint8 indexed phase);
     event PhaseAdvanced(uint8 indexed phase, uint256 timestamp);
     event AuctionFinalized(address indexed winner, uint256 amount);
     event ProceedsWithdrawn(uint256 amount);
@@ -95,10 +108,12 @@ contract AuctionManager is Ownable, Pausable, ReentrancyGuard, IERC721Receiver {
      * @param _paymentToken Payment token contract address (e.g., USDC)
      * @param _nftContract NFT contract address to auction
      * @param _tokenId Token ID of the NFT (must already be owned by this contract)
-     * @param _phaseDurations Array of 3 phase durations (must each be >= 1 day)
+     * @param _phaseDurations Array of 3 phase durations in seconds (each must be > 0)
      * @param _floorPrice Minimum first bid amount
      * @param _minBidIncrementPercent Minimum bid increment as percentage (1-100)
      * @param _enforceMinIncrement Whether to enforce the minimum increment
+     * @param _participationFee One-time fee required to participate (can be 0)
+     * @param _treasury Address that receives participation fees and winning bid (cannot be 0)
      */
     constructor(
         address _initialOwner,
@@ -108,12 +123,15 @@ contract AuctionManager is Ownable, Pausable, ReentrancyGuard, IERC721Receiver {
         uint256[4] memory _phaseDurations,
         uint256 _floorPrice,
         uint256 _minBidIncrementPercent,
-        bool _enforceMinIncrement
+        bool _enforceMinIncrement,
+        uint256 _participationFee,
+        address _treasury
     ) Ownable(_initialOwner) {
         require(_paymentToken != address(0), "Invalid payment token");
         require(_nftContract != address(0), "Invalid NFT address");
         require(_floorPrice > 0, "Floor price must be > 0");
         require(_minBidIncrementPercent > 0 && _minBidIncrementPercent <= 100, "Invalid increment percent");
+        require(_treasury != address(0), "Invalid treasury address");
         
         // Validate NFT ownership
         require(
@@ -127,10 +145,12 @@ contract AuctionManager is Ownable, Pausable, ReentrancyGuard, IERC721Receiver {
         floorPrice = _floorPrice;
         minBidIncrementPercent = _minBidIncrementPercent;
         enforceMinIncrement = _enforceMinIncrement;
+        participationFee = _participationFee;
+        treasury = _treasury;
         
-        // Validate and initialize phase durations (minimum 1 day each)
+        // Validate and initialize phase durations (can be any value in seconds)
         for (uint8 i = 0; i < 3; i++) {
-            require(_phaseDurations[i] >= 1 days, "Duration must be >= 1 day");
+            require(_phaseDurations[i] > 0, "Duration must be > 0");
             phases[i].minDuration = _phaseDurations[i];
         }
         
@@ -144,12 +164,28 @@ contract AuctionManager is Ownable, Pausable, ReentrancyGuard, IERC721Receiver {
     /**
      * @notice Places an incremental bid in the current auction phase
      * @dev Users can increase their own bids multiple times. Total bid must meet requirements.
+     * @dev First-time bidders must pay the participation fee if configured (non-refundable)
      * @param amount The incremental amount to add to user's current bid
      */
     function placeBid(uint256 amount) external whenNotPaused nonReentrant {
         require(!finalized, "Auction ended");
         require(currentPhase <= 2, "Bidding closed");
         require(amount > 0, "Amount must be > 0");
+        
+        // Handle participation fee for first-time bidders
+        if (participationFee > 0 && !hasPaid[msg.sender]) {
+            // Transfer participation fee to treasury (non-refundable)
+            require(
+                paymentToken.transferFrom(msg.sender, treasury, participationFee),
+                "Participation fee transfer failed"
+            );
+            
+            // Mark as paid and update counter
+            hasPaid[msg.sender] = true;
+            totalParticipationFees += participationFee;
+            
+            emit ParticipationFeePaid(msg.sender, participationFee, currentPhase);
+        }
         
         // Calculate user's new total bid
         uint256 newTotalBid = userBids[msg.sender] + amount;
@@ -318,8 +354,8 @@ contract AuctionManager is Ownable, Pausable, ReentrancyGuard, IERC721Receiver {
     // ============ Owner Functions ============
     
     /**
-     * @notice Withdraws auction proceeds to owner (once after finalization)
-     * @dev Only the winning bid is proceeds; all others can be withdrawn by bidders
+     * @notice Withdraws auction proceeds to treasury (once after finalization)
+     * @dev Only the winning bid goes to treasury; participation fees already sent during bidding
      */
     function withdrawProceeds() external onlyOwner nonReentrant {
         require(finalized, "Not finalized");
@@ -330,9 +366,21 @@ contract AuctionManager is Ownable, Pausable, ReentrancyGuard, IERC721Receiver {
         
         proceedsWithdrawn = true;
         
-        require(paymentToken.transfer(owner(), amount), "Payment transfer failed");
+        require(paymentToken.transfer(treasury, amount), "Payment transfer failed");
         
         emit ProceedsWithdrawn(amount);
+    }
+    
+    /**
+     * @notice Emergency function to withdraw funds to owner
+     * @dev Can be called anytime by owner for emergency situations
+     * @dev Allows owner to recover funds if needed (e.g., treasury issues, contract problems)
+     */
+    function emergencyWithdrawFunds() external onlyOwner nonReentrant {
+        uint256 balance = paymentToken.balanceOf(address(this));
+        require(balance > 0, "No funds to withdraw");
+        
+        require(paymentToken.transfer(owner(), balance), "Payment transfer failed");
     }
     
     /**

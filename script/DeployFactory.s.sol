@@ -122,6 +122,13 @@ contract DeployFactory is Script {
         console.log("  Phase 1 Duration:", phaseDurations[1], "seconds");
         console.log("  Phase 2 Duration:", phaseDurations[2], "seconds");
         
+        // Auction configuration - Participation fee and treasury
+        uint256 participationFee = 0; // Can be set to require participation fee (e.g., 10 * 10**6 for 10 USDC)
+        address treasury = deployer; // Treasury receives participation fees and winning bid
+        
+        console.log("  Participation Fee:", participationFee);
+        console.log("  Treasury Address:", treasury);
+        
         // Calculate next contract address (for AuctionManager)
         // Current nonce + 1 because we'll do transferFrom before deploying
         uint256 nonce = vm.getNonce(deployer) + 1;
@@ -143,7 +150,9 @@ contract DeployFactory is Script {
             phaseDurations,
             floorPrice,
             minBidIncrementPercent,
-            enforceMinIncrement
+            enforceMinIncrement,
+            participationFee,
+            treasury
         );
         
         // Verify address matches prediction

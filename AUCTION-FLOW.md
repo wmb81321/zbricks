@@ -35,22 +35,25 @@ The ZBrick auction system implements a **4-phase Continuous Clearing Auction (CC
 
 | Phase | Duration | Bidding | Metadata Reveal | Description |
 |-------|----------|---------|-----------------|-------------|
-| **Phase 0** | 48 hours | ✅ Active | Initial | Basic property information |
-| **Phase 1** | 24 hours | ✅ Active | Second | Additional details revealed |
-| **Phase 2** | 24 hours | ✅ Active | Final | Complete information |
+| **Phase 0** | Configurable | ✅ Active | Initial | Basic property information |
+| **Phase 1** | Configurable | ✅ Active | Second | Additional details revealed |
+| **Phase 2** | Configurable | ✅ Active | Final | Complete information |
 | **Phase 3** | Indefinite | ❌ Closed | Winner | Post-finalization |
 
-**Total Duration**: 96 hours (4 days) minimum
+**Total Duration**: Configurable (each phase must be > 0 seconds)
 
 ### Core Features
 
 - 💰 **Winner-Takes-All**: Only final winner pays, all others refunded
+- 🎫 **Participation Fee**: Optional one-time fee to participate (non-refundable)
+- 🏦 **Treasury System**: All fees and winning bid go to designated treasury
 - 🔄 **Incremental Bidding**: Users can add to their own bids multiple times
 - 📊 **Cumulative Tracking**: userBids[address] stores total bid per user
 - 📈 **Progressive Reveal**: More property info revealed each phase
 - 🔒 **Phase Locking**: Each phase's winner locked when advancing
 - 💸 **Pull Withdrawals**: Users can withdraw anytime before finalization
 - ⏸️ **Emergency Pause**: Owner can pause for safety
+- 🚨 **Emergency Withdrawal**: Owner can withdraw funds anytime for emergencies
 
 ---
 
@@ -73,24 +76,33 @@ The ZBrick auction system implements a **4-phase Continuous Clearing Auction (CC
 #### Bidding Mechanics
 
 ```solidity
-// First bid: 5,000 USDC
-IERC20(paymentToken).approve(auctionAddress, 5000000000);
-auction.placeBid(5000000000);  // userBids[you] = 5,000 USDC
+// Note: If participation fee is set, it's charged on first bid only
+// Example: 10 USDC participation fee + 5,000 USDC bid
 
-// Later, add 2,000 more USDC
+// First bid: Pay participation fee (10 USDC) + bid (5,000 USDC)
+IERC20(paymentToken).approve(auctionAddress, 5010000000);
+auction.placeBid(5000000000);  
+// Participation fee (10 USDC) → treasury (non-refundable)
+// Bid (5,000 USDC) → contract
+// userBids[you] = 5,000 USDC
+// hasPaid[you] = true
+
+// Later, add 2,000 more USDC (no additional fee)
 IERC20(paymentToken).approve(auctionAddress, 2000000000);
 auction.placeBid(2000000000);  // userBids[you] = 7,000 USDC total!
+// No fee charged - already paid on first bid
 
-// Can withdraw full amount anytime before finalization
-auction.withdrawBid();  // Get all 7,000 USDC back
+// Can withdraw bid amount (fee is non-refundable)
+auction.withdrawBid();  // Get 7,000 USDC back (not the 10 USDC fee)
 ```
 
 #### Bidding Requirements
 
+- **Participation Fee** (if configured): One-time non-refundable fee charged on first bid only
 - **Minimum Total**: New total bid (userBids[you] + newAmount) >= floorPrice
 - **Increment Rule** (if enforced): If not current leader, new total >= currentHighBid * (1 + minBidIncrementPercent/100)
 - **Payment Token**: USDC or configured payment token (6 decimals)
-- **Approval**: Must approve payment token for incremental amount
+- **Approval**: Must approve payment token for (incremental amount + participation fee on first bid)
 
 #### State Variables During Phase 0
 

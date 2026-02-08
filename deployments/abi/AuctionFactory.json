@@ -72,6 +72,16 @@
         "name": "_enforceMinIncrement",
         "type": "bool",
         "internalType": "bool"
+      },
+      {
+        "name": "_participationFee",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "_treasury",
+        "type": "address",
+        "internalType": "address"
       }
     ],
     "outputs": [
@@ -237,6 +247,18 @@
         "type": "bool",
         "indexed": false,
         "internalType": "bool"
+      },
+      {
+        "name": "participationFee",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      },
+      {
+        "name": "treasury",
+        "type": "address",
+        "indexed": false,
+        "internalType": "address"
       },
       {
         "name": "timestamp",
