@@ -3,10 +3,13 @@
 /**
  * Extract deployment addresses and ABIs from forge broadcast files
  * 
- * Usage: node script/extractDeployment.js [chainId]
- * Example: node script/extractDeployment.js 84532
+ * Usage: 
+ *   node script/extractDeployment.js              - Extract all chains
+ *   node script/extractDeployment.js [chainId]    - Extract specific chain
  * 
- * If no chainId provided, uses the latest broadcast folder
+ * Example: 
+ *   node script/extractDeployment.js 84532
+ *   node script/extractDeployment.js all
  */
 
 const fs = require('fs');
@@ -14,13 +17,35 @@ const path = require('path');
 
 // Chain ID mapping
 const CHAINS = {
-  '84532': 'Base Sepolia',
-  '8453': 'Base Mainnet',
-  '31337': 'Local'
+  '84532': { name: 'Base Sepolia', explorer: 'https://base-sepolia.blockscout.com' },
+  '8453': { name: 'Base Mainnet', explorer: 'https://base.blockscout.com' },
+  '5042002': { name: 'Arc Testnet', explorer: 'https://testnet.arcscan.app' },
+  '5042000': { name: 'Arc Mainnet', explorer: 'TBA' },
+  '31337': { name: 'Local', explorer: null }
 };
 
+function getAllDeployments() {
+  const broadcastDir = path.join(__dirname, '..', 'broadcast', 'DeployFactory.s.sol');
+  
+  if (!fs.existsSync(broadcastDir)) {
+    console.error('❌ No broadcast directory found. Have you deployed yet?');
+    return [];
+  }
+  
+  const chainDirs = fs.readdirSync(broadcastDir)
+    .filter(f => fs.statSync(path.join(broadcastDir, f)).isDirectory());
+  
+  return chainDirs.map(chainId => {
+    const runLatest = path.join(broadcastDir, chainId, 'run-latest.json');
+    if (fs.existsSync(runLatest)) {
+      return { chainId, file: runLatest };
+    }
+    return null;
+  }).filter(Boolean);
+}
+
 function findLatestBroadcast(chainId) {
-  const broadcastDir = path.join(__dirname, '..', 'broadcast', 'DeployAuction.s.sol');
+  const broadcastDir = path.join(__dirname, '..', 'broadcast', 'DeployFactory.s.sol');
   
   if (!fs.existsSync(broadcastDir)) {
     console.error('❌ No broadcast directory found. Have you deployed yet?');
@@ -64,7 +89,7 @@ function extractABI(contractName) {
   const artifactPath = path.join(__dirname, '..', 'out', `${contractName}.sol`, `${contractName}.json`);
   
   if (!fs.existsSync(artifactPath)) {
-    console.error(`❌ ABI not found for ${contractName}`);
+    console.warn(`⚠️  ABI not found for ${contractName}`);
     return null;
   }
   
@@ -72,16 +97,8 @@ function extractABI(contractName) {
   return artifact.abi;
 }
 
-function main() {
-  const chainId = process.argv[2];
-  
-  console.log('🔍 Extracting deployment information...\n');
-  
-  const { file, chainId: detectedChainId } = findLatestBroadcast(chainId);
-  const chainName = CHAINS[detectedChainId] || `Chain ${detectedChainId}`;
-  
-  console.log(`📡 Network: ${chainName} (${detectedChainId})`);
-  console.log(`📁 Reading: ${file}\n`);
+function processDeployment(chainId, file) {
+  const chainInfo = CHAINS[chainId] || { name: `Chain ${chainId}`, explorer: null };
   
   const broadcast = JSON.parse(fs.readFileSync(file, 'utf8'));
   
@@ -99,49 +116,77 @@ function main() {
     }
   }
   
-  if (Object.keys(contracts).length === 0) {
-    console.error('❌ No contracts found in deployment');
-    process.exit(1);
-  }
-  
-  console.log('📋 Deployed Contracts:\n');
-  for (const [name, address] of Object.entries(contracts)) {
-    console.log(`   ${name}: ${address}`);
-  }
-  console.log('');
-  
-  // Create deployment info object
-  const deploymentInfo = {
-    network: chainName,
-    chainId: detectedChainId,
-    timestamp: new Date().toISOString(),
-    contracts: {}
+  return {
+    chainId,
+    chainName: chainInfo.name,
+    explorer: chainInfo.explorer,
+    contracts
   };
+}
+function main() {
+  const arg = process.argv[2];
+  const extractAll = !arg || arg === 'all';
   
-  // Add addresses and ABIs
-  for (const [name, address] of Object.entries(contracts)) {
-    const abi = extractABI(name);
-    deploymentInfo.contracts[name] = {
-      address,
-      abi: abi || []
-    };
+  console.log('🔍 Extracting deployment information...\n');
+  
+  let deployments = [];
+  
+  if (extractAll) {
+    console.log('📡 Extracting all chain deployments\n');
+    const allDeployments = getAllDeployments();
+    
+    if (allDeployments.length === 0) {
+      console.error('❌ No deployments found');
+      process.exit(1);
+    }
+    
+    deployments = allDeployments.map(({ chainId, file }) => 
+      processDeployment(chainId, file)
+    );
+  } else {
+    const { file, chainId } = findLatestBroadcast(arg);
+    deployments = [processDeployment(chainId, file)];
   }
   
-  // Save to deployments folder
+  // Display all deployments
+  for (const deployment of deployments) {
+    console.log(`\n📡 ${deployment.chainName} (Chain ID: ${deployment.chainId})`);
+    console.log('─'.repeat(60));
+    
+    if (Object.keys(deployment.contracts).length === 0) {
+      console.log('   No contracts found');
+      continue;
+    }
+    
+    for (const [name, address] of Object.entries(deployment.contracts)) {
+      console.log(`   ${name.padEnd(20)} ${address}`);
+      if (deployment.explorer && deployment.explorer !== 'TBA') {
+        console.log(`   ${' '.repeat(20)} ${deployment.explorer}/address/${address}`);
+      }
+    }
+  }
+  
+  console.log('\n');
+  
+  // Extract ABIs (once, they're the same across chains)
   const deploymentsDir = path.join(__dirname, '..', 'deployments');
   if (!fs.existsSync(deploymentsDir)) {
-    fs.mkdirSync(deploymentsDir);
+    fs.mkdirSync(deploymentsDir, { recursive: true });
   }
   
-  // Create ABI directory (shared across all chains)
   const abiDir = path.join(deploymentsDir, 'abi');
   if (!fs.existsSync(abiDir)) {
-    fs.mkdirSync(abiDir);
+    fs.mkdirSync(abiDir, { recursive: true });
   }
   
-  // Save individual ABI files per contract (only once, chain-agnostic)
+  // Get unique contract names across all deployments
+  const contractNames = new Set();
+  deployments.forEach(d => {
+    Object.keys(d.contracts).forEach(name => contractNames.add(name));
+  });
+  
   console.log('📦 Extracting ABIs:\n');
-  for (const [name, address] of Object.entries(contracts)) {
+  for (const name of contractNames) {
     const abi = extractABI(name);
     if (abi) {
       const abiFile = path.join(abiDir, `${name}.json`);
@@ -151,34 +196,88 @@ function main() {
   }
   console.log('');
   
-  // Load or create addresses.json
+  // Create addresses.json with all chains
+  const addressesData = {};
+  
+  for (const deployment of deployments) {
+    const chainInfo = CHAINS[deployment.chainId] || { name: deployment.chainName, explorer: null };
+    
+    addressesData[deployment.chainId] = {
+      chainId: parseInt(deployment.chainId),
+      chainName: deployment.chainName,
+      explorer: chainInfo.explorer,
+      timestamp: new Date().toISOString(),
+      contracts: deployment.contracts
+    };
+  }
+  
   const addressesFile = path.join(deploymentsDir, 'addresses.json');
-  let addressesData = {};
-  
-  if (fs.existsSync(addressesFile)) {
-    addressesData = JSON.parse(fs.readFileSync(addressesFile, 'utf8'));
-  }
-  
-  // Update addresses for this chain
-  addressesData[detectedChainId] = {
-    chainId: parseInt(detectedChainId),
-    chainName,
-    timestamp: new Date().toISOString(),
-    contracts: contracts
-  };
-  
-  // Save updated addresses.json
   fs.writeFileSync(addressesFile, JSON.stringify(addressesData, null, 2));
-  console.log(`✅ Addresses updated in: ${addressesFile}\n`);
   
-  // Show current chain info
-  console.log(`📋 ${chainName} (${detectedChainId}):\n`);
-  for (const [name, address] of Object.entries(contracts)) {
-    console.log(`   ${name}: ${address}`);
+  console.log('💾 Saved deployment information:\n');
+  console.log(`   ✓ deployments/addresses.json (${Object.keys(addressesData).length} chains)`);
+  console.log(`   ✓ deployments/abi/ (${contractNames.size} contracts)\n`);
+  
+  // Generate markdown documentation
+  generateMarkdownDocs(deployments, deploymentsDir);
+  
+  console.log('✅ Extraction complete!\n');
+}
+
+function generateMarkdownDocs(deployments, deploymentsDir) {
+  const lines = ['# Deployed Contracts\n'];
+  lines.push(`*Last updated: ${new Date().toISOString()}*\n`);
+  lines.push('## Networks\n');
+  
+  for (const deployment of deployments) {
+    lines.push(`### ${deployment.chainName} (Chain ID: ${deployment.chainId})\n`);
+    
+    if (Object.keys(deployment.contracts).length === 0) {
+      lines.push('*No contracts deployed*\n');
+      continue;
+    }
+    
+    lines.push('| Contract | Address | Explorer |');
+    lines.push('|----------|---------|----------|');
+    
+    for (const [name, address] of Object.entries(deployment.contracts)) {
+      let explorerLink = address;
+      if (deployment.explorer && deployment.explorer !== 'TBA') {
+        explorerLink = `[View](${deployment.explorer}/address/${address})`;
+      }
+      lines.push(`| **${name}** | \`${address}\` | ${explorerLink} |`);
+    }
+    
+    lines.push('');
   }
-  console.log('');
   
-  console.log('✨ Extraction complete!');
+  lines.push('## ABIs\n');
+  lines.push('Contract ABIs are available in [`deployments/abi/`](./abi/) directory:\n');
+  
+  const contractNames = new Set();
+  deployments.forEach(d => {
+    Object.keys(d.contracts).forEach(name => contractNames.add(name));
+  });
+  
+  for (const name of Array.from(contractNames).sort()) {
+    lines.push(`- [\`${name}.json\`](./abi/${name}.json)`);
+  }
+  
+  lines.push('\n## Usage\n');
+  lines.push('```javascript');
+  lines.push("const addresses = require('./deployments/addresses.json');");
+  lines.push("const houseNFTAbi = require('./deployments/abi/HouseNFT.json');\n");
+  lines.push('// Get contract address for specific chain');
+  lines.push("const chainId = '84532'; // Base Sepolia");
+  lines.push('const houseNFTAddress = addresses[chainId].contracts.HouseNFT;\n');
+  lines.push('// Use with ethers.js or viem');
+  lines.push('// const contract = new ethers.Contract(houseNFTAddress, houseNFTAbi, provider);');
+  lines.push('```\n');
+  
+  const docsFile = path.join(deploymentsDir, 'README.md');
+  fs.writeFileSync(docsFile, lines.join('\n'));
+  
+  console.log('   ✓ deployments/README.md');
 }
 
 try {
@@ -187,3 +286,4 @@ try {
   console.error('❌ Error:', error.message);
   process.exit(1);
 }
+

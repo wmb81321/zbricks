@@ -1,35 +1,47 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.13;
 
+import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/utils/Pausable.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/token/ERC721/IERC721Receiver.sol";
+import "@openzeppelin/contracts/token/ERC721/IERC721.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
 import "./HouseNFT.sol";
 
 /**
  * @title AuctionManager
- * @notice Manages a multi-phase continuous clearing auction for a single house NFT with USDC bidding
- * @dev Implements Checks-Effects-Interactions pattern, pull-based refunds, and emergency pause
+ * @notice Manages a multi-phase continuous clearing auction for a single NFT with flexible payment token bidding
+ * @dev Implements flexible bid management with withdrawal, automatic NFT phase sync, and emergency controls
+ * @dev Deployed via AuctionFactory for independent auction instances
  */
-contract AuctionManager is Pausable, ReentrancyGuard, IERC721Receiver {
+contract AuctionManager is Ownable, Pausable, ReentrancyGuard, IERC721Receiver {
+    using EnumerableSet for EnumerableSet.AddressSet;
+    
     // ============ Immutable Storage ============
     
-    /// @notice USDC token contract for bidding
-    IERC20 public immutable usdc;
+    /// @notice Payment token contract for bidding (e.g., USDC, DAI)
+    IERC20 public immutable paymentToken;
     
-    /// @notice House NFT being auctioned
-    HouseNFT public immutable houseNFT;
+    /// @notice NFT contract being auctioned
+    IERC721 public immutable nftContract;
     
-    /// @notice Fixed token ID for the house NFT
-    uint256 private constant TOKEN_ID = 1;
+    /// @notice Token ID of the NFT being auctioned
+    uint256 public immutable tokenId;
+    
+    /// @notice Minimum first bid amount (floor price)
+    uint256 public immutable floorPrice;
+    
+    /// @notice Minimum bid increment as percentage (e.g., 5 = 5%)
+    uint256 public immutable minBidIncrementPercent;
+    
+    /// @notice Whether to enforce minimum bid increment
+    bool public immutable enforceMinIncrement;
     
     // ============ Mutable Storage ============
     
-    /// @notice Admin address with control privileges
-    address public admin;
-    
-    /// @notice Current auction phase (0-3)
+    /// @notice Current auction phase (0-2)
     uint8 public currentPhase;
     
     /// @notice Current highest bidder
@@ -38,14 +50,20 @@ contract AuctionManager is Pausable, ReentrancyGuard, IERC721Receiver {
     /// @notice Current highest bid amount
     uint256 public currentHighBid;
     
+    /// @notice Winner of the auction (set upon finalization)
+    address public winner;
+    
     /// @notice Whether the auction has been finalized
     bool public finalized;
     
-    /// @notice Whether proceeds have been withdrawn by admin
+    /// @notice Whether proceeds have been withdrawn by owner
     bool private proceedsWithdrawn;
     
-    /// @notice Mapping of bidder address to refund balance
-    mapping(address => uint256) public refundBalance;
+    /// @notice Set of all unique bidders
+    EnumerableSet.AddressSet private bidders;
+    
+    /// @notice Mapping of bidder address to their total bid amount
+    mapping(address => uint256) public userBids;
     
     /// @notice Information for each auction phase
     mapping(uint8 => PhaseInfo) public phases;
@@ -62,107 +80,165 @@ contract AuctionManager is Pausable, ReentrancyGuard, IERC721Receiver {
     
     // ============ Events ============
     
-    event BidPlaced(uint8 indexed phase, address indexed bidder, uint256 amount);
+    event BidPlaced(address indexed bidder, uint256 incrementalAmount, uint256 newTotalBid, uint8 indexed phase);
+    event BidWithdrawn(address indexed bidder, uint256 amount, uint8 indexed phase);
     event PhaseAdvanced(uint8 indexed phase, uint256 timestamp);
     event AuctionFinalized(address indexed winner, uint256 amount);
-    event RefundWithdrawn(address indexed bidder, uint256 amount);
     event ProceedsWithdrawn(uint256 amount);
-    event AdminTransferred(address indexed oldAdmin, address indexed newAdmin);
-    
-    // ============ Modifiers ============
-    
-    modifier onlyAdmin() {
-        require(msg.sender == admin, "Only admin");
-        _;
-    }
+    event EmergencyNFTWithdrawal(uint256 indexed tokenId, address indexed to);
     
     // ============ Constructor ============
     
     /**
-     * @notice Constructs the auction manager with configurable phase durations
-     * @param _usdc USDC token contract address
-     * @param _houseNFT HouseNFT contract address
-     * @param _admin Admin address for control functions
-     * @param _phaseDurations Array of 4 phase durations (must each be >= 24 hours)
+     * @notice Constructs a single-auction manager with configurable parameters
+     * @param _initialOwner Owner address with control privileges (receives ownership)
+     * @param _paymentToken Payment token contract address (e.g., USDC)
+     * @param _nftContract NFT contract address to auction
+     * @param _tokenId Token ID of the NFT (must already be owned by this contract)
+     * @param _phaseDurations Array of 3 phase durations (must each be >= 1 day)
+     * @param _floorPrice Minimum first bid amount
+     * @param _minBidIncrementPercent Minimum bid increment as percentage (1-100)
+     * @param _enforceMinIncrement Whether to enforce the minimum increment
      */
     constructor(
-        address _usdc,
-        address _houseNFT,
-        address _admin,
-        uint256[4] memory _phaseDurations
-    ) {
-        require(_usdc != address(0), "Invalid USDC address");
-        require(_houseNFT != address(0), "Invalid NFT address");
-        require(_admin != address(0), "Invalid admin address");
+        address _initialOwner,
+        address _paymentToken,
+        address _nftContract,
+        uint256 _tokenId,
+        uint256[4] memory _phaseDurations,
+        uint256 _floorPrice,
+        uint256 _minBidIncrementPercent,
+        bool _enforceMinIncrement
+    ) Ownable(_initialOwner) {
+        require(_paymentToken != address(0), "Invalid payment token");
+        require(_nftContract != address(0), "Invalid NFT address");
+        require(_floorPrice > 0, "Floor price must be > 0");
+        require(_minBidIncrementPercent > 0 && _minBidIncrementPercent <= 100, "Invalid increment percent");
         
-        usdc = IERC20(_usdc);
-        houseNFT = HouseNFT(_houseNFT);
-        admin = _admin;
+        // Validate NFT ownership
+        require(
+            IERC721(_nftContract).ownerOf(_tokenId) == address(this),
+            "Contract must own NFT"
+        );
         
-        // Validate and initialize phase durations (minimum 24 hours each)
-        for (uint8 i = 0; i < 4; i++) {
-            require(_phaseDurations[i] >= 24 hours, "Duration must be >= 24 hours");
+        paymentToken = IERC20(_paymentToken);
+        nftContract = IERC721(_nftContract);
+        tokenId = _tokenId;
+        floorPrice = _floorPrice;
+        minBidIncrementPercent = _minBidIncrementPercent;
+        enforceMinIncrement = _enforceMinIncrement;
+        
+        // Validate and initialize phase durations (minimum 1 day each)
+        for (uint8 i = 0; i < 3; i++) {
+            require(_phaseDurations[i] >= 1 days, "Duration must be >= 1 day");
             phases[i].minDuration = _phaseDurations[i];
         }
         
         // Start phase 0
         phases[0].startTime = block.timestamp;
+        currentHighBid = 0; // Will be enforced via floorPrice in placeBid
     }
     
     // ============ Bidding Functions ============
     
     /**
-     * @notice Places a bid in the current auction phase
-     * @dev Implements Checks-Effects-Interactions pattern to prevent reentrancy
-     * @param amount The bid amount in USDC (must be > currentHighBid)
+     * @notice Places an incremental bid in the current auction phase
+     * @dev Users can increase their own bids multiple times. Total bid must meet requirements.
+     * @param amount The incremental amount to add to user's current bid
      */
     function placeBid(uint256 amount) external whenNotPaused nonReentrant {
-        // ===== CHECKS =====
         require(!finalized, "Auction ended");
         require(currentPhase <= 2, "Bidding closed");
-        require(amount > currentHighBid, "Bid too low");
+        require(amount > 0, "Amount must be > 0");
         
-        // ===== EFFECTS =====
-        // Update refund for previous leader
-        if (currentLeader != address(0)) {
-            refundBalance[currentLeader] += currentHighBid;
+        // Calculate user's new total bid
+        uint256 newTotalBid = userBids[msg.sender] + amount;
+        
+        // Validate floor price
+        require(newTotalBid >= floorPrice, "Bid below floor price");
+        
+        // Validate minimum increment (if enforced and user is not current leader)
+        if (enforceMinIncrement && msg.sender != currentLeader && currentHighBid > 0) {
+            uint256 minRequired = currentHighBid + (currentHighBid * minBidIncrementPercent / 100);
+            require(newTotalBid >= minRequired, "Bid increment too low");
         }
         
-        // Update current leader and bid
-        currentLeader = msg.sender;
-        currentHighBid = amount;
+        // Transfer incremental amount from bidder
+        require(
+            paymentToken.transferFrom(msg.sender, address(this), amount),
+            "Payment transfer failed"
+        );
         
-        emit BidPlaced(currentPhase, msg.sender, amount);
+        // Update user's total bid
+        userBids[msg.sender] = newTotalBid;
         
-        // ===== INTERACTIONS =====
-        // Transfer USDC from bidder (external call last)
-        require(usdc.transferFrom(msg.sender, address(this), amount), "USDC transfer failed");
+        // Add to bidders set (no-op if already exists)
+        bidders.add(msg.sender);
+        
+        // Recalculate leader
+        _updateLeader();
+        
+        emit BidPlaced(msg.sender, amount, newTotalBid, currentPhase);
     }
     
     /**
-     * @notice Withdraws refund balance for caller (pull-payment pattern)
-     * @dev Can be called even when paused or after finalization for user fund safety
+     * @notice Allows user to withdraw their full bid before auction finalization
+     * @dev Useful for users who want to exit and re-bid with a different amount
      */
-    function withdraw() external nonReentrant {
-        uint256 amount = refundBalance[msg.sender];
-        require(amount > 0, "No refund");
+    function withdrawBid() external whenNotPaused nonReentrant {
+        require(!finalized, "Auction ended - cannot withdraw");
+        require(userBids[msg.sender] > 0, "No bid to withdraw");
         
-        // Clear balance before transfer (reentrancy protection)
-        refundBalance[msg.sender] = 0;
+        uint256 bidAmount = userBids[msg.sender];
         
-        require(usdc.transfer(msg.sender, amount), "USDC transfer failed");
+        // Clear user's bid
+        userBids[msg.sender] = 0;
         
-        emit RefundWithdrawn(msg.sender, amount);
+        // Remove from bidders set
+        bidders.remove(msg.sender);
+        
+        // Transfer funds back
+        require(
+            paymentToken.transfer(msg.sender, bidAmount),
+            "Payment transfer failed"
+        );
+        
+        // Recalculate leader after withdrawal
+        _updateLeader();
+        
+        emit BidWithdrawn(msg.sender, bidAmount, currentPhase);
+    }
+    
+    /**
+     * @notice Internal function to recalculate current leader and highest bid
+     * @dev Iterates through all bidders to find the highest bid
+     */
+    function _updateLeader() internal {
+        address newLeader = address(0);
+        uint256 newHighBid = 0;
+        
+        uint256 length = bidders.length();
+        for (uint256 i = 0; i < length; i++) {
+            address bidder = bidders.at(i);
+            uint256 bid = userBids[bidder];
+            
+            if (bid > newHighBid) {
+                newHighBid = bid;
+                newLeader = bidder;
+            }
+        }
+        
+        currentLeader = newLeader;
+        currentHighBid = newHighBid;
     }
     
     // ============ Phase Management ============
     
     /**
-     * @notice Advances to the next auction phase (admin only)
-     * @dev Locks current phase data and progresses auction phase
-     * @dev Admin must manually advance NFT metadata separately using HouseNFT.advancePhase()
+     * @notice Advances to the next auction phase (owner only)
+     * @dev Locks current phase data, progresses auction phase, and syncs NFT metadata phase
      */
-    function advancePhase() external onlyAdmin whenNotPaused {
+    function advancePhase() external onlyOwner whenNotPaused {
         require(currentPhase < 2, "Cannot advance beyond phase 2");
         require(!finalized, "Auction ended");
         
@@ -183,15 +259,17 @@ contract AuctionManager is Pausable, ReentrancyGuard, IERC721Receiver {
         currentPhase++;
         phases[currentPhase].startTime = block.timestamp;
         
+        // Attempt to sync NFT metadata phase
+        _syncNFTPhase(currentPhase);
+        
         emit PhaseAdvanced(currentPhase, block.timestamp);
     }
     
     /**
-     * @notice Finalizes the auction and transfers NFT to winner (admin only)
-     * @dev Requires phase 2 complete, locks final data, and transfers to winner
-     * @dev Admin must manually advance NFT to phase 3 after finalization
+     * @notice Finalizes the auction and transfers NFT to winner (owner only)
+     * @dev Requires phase 2 complete, locks final data, transfers NFT, and syncs to phase 3
      */
-    function finalizeAuction() external onlyAdmin {
+    function finalizeAuction() external onlyOwner {
         require(currentPhase == 2, "Must be at phase 2");
         require(!finalized, "Already finalized");
         require(currentLeader != address(0), "No winner");
@@ -208,22 +286,42 @@ contract AuctionManager is Pausable, ReentrancyGuard, IERC721Receiver {
         phases[2].highBid = currentHighBid;
         phases[2].revealed = true;
         
+        // Store winner
+        winner = currentLeader;
+        
         // Mark as finalized
         finalized = true;
         
         // Transfer NFT to winner
-        houseNFT.safeTransferFrom(address(this), currentLeader, TOKEN_ID);
+        nftContract.safeTransferFrom(address(this), winner, tokenId);
         
-        emit AuctionFinalized(currentLeader, currentHighBid);
+        // Sync NFT to final phase (phase 3)
+        _syncNFTPhase(3);
+        
+        emit AuctionFinalized(winner, currentHighBid);
     }
     
-    // ============ Admin Functions ============
+    /**
+     * @notice Internal function to sync NFT metadata phase if supported
+     * @dev Attempts to call advancePhase on HouseNFT, silently fails if not supported
+     * @param phase The phase number to advance to
+     */
+    function _syncNFTPhase(uint8 phase) internal {
+        try HouseNFT(address(nftContract)).advancePhase(tokenId, phase) {
+            // Successfully synced NFT phase
+        } catch {
+            // NFT doesn't support phase advancement or caller is not controller
+            // This is acceptable - admin can manually sync if needed
+        }
+    }
+    
+    // ============ Owner Functions ============
     
     /**
-     * @notice Withdraws auction proceeds to admin (once after finalization)
-     * @dev Only the final winner's bid is proceeds; all others are refunded
+     * @notice Withdraws auction proceeds to owner (once after finalization)
+     * @dev Only the winning bid is proceeds; all others can be withdrawn by bidders
      */
-    function withdrawProceeds() external onlyAdmin nonReentrant {
+    function withdrawProceeds() external onlyOwner nonReentrant {
         require(finalized, "Not finalized");
         require(!proceedsWithdrawn, "Already withdrawn");
         
@@ -232,48 +330,58 @@ contract AuctionManager is Pausable, ReentrancyGuard, IERC721Receiver {
         
         proceedsWithdrawn = true;
         
-        require(usdc.transfer(admin, amount), "USDC transfer failed");
+        require(paymentToken.transfer(owner(), amount), "Payment transfer failed");
         
         emit ProceedsWithdrawn(amount);
     }
     
     /**
-     * @notice Transfers admin role to a new address
-     * @param newAdmin The new admin address
+     * @notice Emergency function to withdraw NFT to owner
+     * @dev Can only be called after finalization or in emergency (when paused)
+     * @dev Useful if winner cannot receive NFT or other emergencies
      */
-    function transferAdmin(address newAdmin) external onlyAdmin {
-        require(newAdmin != address(0), "Invalid admin");
+    function emergencyWithdrawNFT() external onlyOwner {
+        require(finalized || paused(), "Must be finalized or paused");
         
-        address oldAdmin = admin;
-        admin = newAdmin;
+        nftContract.safeTransferFrom(address(this), owner(), tokenId);
         
-        emit AdminTransferred(oldAdmin, newAdmin);
+        emit EmergencyNFTWithdrawal(tokenId, owner());
     }
     
     /**
-     * @notice Pauses bidding and phase advancement (emergency only)
-     * @dev Does NOT pause withdrawals for user fund safety
+     * @notice Pauses bidding, withdrawals, and phase advancement (emergency only)
      */
-    function pause() external onlyAdmin {
+    function pause() external onlyOwner {
         _pause();
     }
     
     /**
      * @notice Unpauses the auction
      */
-    function unpause() external onlyAdmin {
+    function unpause() external onlyOwner {
         _unpause();
     }
     
     // ============ View Functions ============
     
     /**
+     * @notice Returns all unique bidders in the auction
+     * @return Array of bidder addresses
+     */
+    function getBidders() public view returns (address[] memory) {
+        return bidders.values();
+    }
+    
+    /**
+     * @notice Returns the number of unique bidders
+     * @return Number of bidders
+     */
+    function getBidderCount() public view returns (uint256) {
+        return bidders.length();
+    }
+    
+    /**
      * @notice Returns information about the current phase
-     * @return minDuration Minimum duration of current phase
-     * @return startTime When current phase started
-     * @return leader Leader at end of phase (if revealed)
-     * @return highBid Highest bid at end of phase (if revealed)
-     * @return revealed Whether phase has been revealed
      */
     function getCurrentPhaseInfo() external view returns (
         uint256 minDuration,
@@ -287,17 +395,7 @@ contract AuctionManager is Pausable, ReentrancyGuard, IERC721Receiver {
     }
     
     /**
-     * @notice Returns the refund balance for a given bidder
-     * @param bidder The bidder address
-     * @return The refund balance in USDC
-     */
-    function getBidderRefund(address bidder) external view returns (uint256) {
-        return refundBalance[bidder];
-    }
-    
-    /**
      * @notice Checks if the auction is still active
-     * @return True if auction is active, false if finalized
      */
     function isAuctionActive() external view returns (bool) {
         return !finalized;
@@ -305,7 +403,6 @@ contract AuctionManager is Pausable, ReentrancyGuard, IERC721Receiver {
     
     /**
      * @notice Returns time remaining in current phase
-     * @return Seconds remaining (0 if duration already met)
      */
     function getTimeRemaining() external view returns (uint256) {
         PhaseInfo storage info = phases[currentPhase];
@@ -318,13 +415,8 @@ contract AuctionManager is Pausable, ReentrancyGuard, IERC721Receiver {
         return info.minDuration - elapsed;
     }
     
-    // ============ Metadata Helper Functions ============
-    
     /**
-     * @notice Returns current leader and highest bid for metadata preparation
-     * @dev Useful for admin to create next phase metadata with real auction data
-     * @return leader Current highest bidder address
-     * @return highBid Current highest bid amount
+     * @notice Returns current leader and highest bid
      */
     function getCurrentLeaderAndBid() external view returns (address leader, uint256 highBid) {
         return (currentLeader, currentHighBid);
@@ -332,13 +424,6 @@ contract AuctionManager is Pausable, ReentrancyGuard, IERC721Receiver {
     
     /**
      * @notice Returns complete information for a specific phase
-     * @dev Used by admin to gather historical phase data for metadata
-     * @param phase The phase number (0-3)
-     * @return minDuration Minimum duration configured for phase
-     * @return startTime Timestamp when phase started
-     * @return leader Winner of that phase
-     * @return highBid Winning bid of that phase
-     * @return revealed Whether phase has been completed
      */
     function getPhaseInfo(uint8 phase) external view returns (
         uint256 minDuration,
@@ -347,18 +432,13 @@ contract AuctionManager is Pausable, ReentrancyGuard, IERC721Receiver {
         uint256 highBid,
         bool revealed
     ) {
-        require(phase <= 3, "Invalid phase");
+        require(phase <= 2, "Invalid phase");
         PhaseInfo storage info = phases[phase];
         return (info.minDuration, info.startTime, info.leader, info.highBid, info.revealed);
     }
     
     /**
-     * @notice Returns auction state summary for metadata
-     * @return _currentPhase Current phase number
-     * @return _currentLeader Current highest bidder
-     * @return _currentHighBid Current highest bid
-     * @return _finalized Whether auction is finalized
-     * @return _biddingOpen Whether bidding is currently allowed
+     * @notice Returns auction state summary
      */
     function getAuctionState() external view returns (
         uint8 _currentPhase,

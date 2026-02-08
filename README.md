@@ -44,52 +44,189 @@ A secure, multi-phase continuous clearing auction (CCA) system for a single hous
 - Admin withdraws proceeds once via `withdrawProceeds()` after finalization
 - Refunds available even after auction finalization
 
-## Deployment
-
-> 📝 **Quick Setup**: Configure `.env` with `PRIVATE_KEY` and deploy to Base Sepolia for testing
-
-### Networks Supported
-- **Base Mainnet** (Chain ID: 8453)
-  - USDC: `0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913`
-- **Base Sepolia** (Chain ID: 84532)
-  - USDC: `0x036CbD53842c5426634e7929541eC2318f3dCF7e`
-- **Local/Other**: Deploys MockUSDC for testing
+## 🚀 Deployment
 
 ### Quick Deploy
 
 ```bash
 # 1. Setup environment
 cp .env.example .env
-# Edit .env with your PRIVATE_KEY and BASESCAN_API_KEY
+# Add your PRIVATE_KEY to .env
 
-# 2. Deploy to Base Sepolia (testnet)
-forge script script/DeployAuction.s.sol:DeployAuction \
-  --rpc-url base_sepolia \
+# 2. Deploy to testnet
+./script/deploy-and-verify.sh base-sepolia
+
+# 3. Done! Contracts deployed and verified
+```
+
+### Prerequisites
+
+1. **Install Foundry**
+   ```bash
+   curl -L https://foundry.paradigm.xyz | bash
+   foundryup
+   ```
+
+2. **Configure Environment**
+   ```bash
+   cp .env.example .env
+   # Edit .env and add your PRIVATE_KEY
+   ```
+
+3. **Fund Your Wallet**
+   
+   | Network | You Need | Where to Get |
+   |---------|----------|--------------|
+   | **Base Sepolia** | Sepolia ETH | [Coinbase Faucet](https://coinbase.com/faucets/base-ethereum-goerli-faucet) |
+   | **Base Mainnet** | ETH | Bridge from Ethereum mainnet |
+   | **Arc Testnet** | Testnet currency + USDC | [Arc Testnet Faucet](https://testnet.arcscan.app) |
+
+### Supported Networks
+
+| Network | Chain ID | RPC | Explorer | USDC Address |
+|---------|----------|-----|----------|--------------|
+| **Base Sepolia** | 84532 | https://sepolia.base.org | [Blockscout](https://base-sepolia.blockscout.com) | `0x036CbD53842c5426634e7929541eC2318f3dCF7e` |
+| **Base Mainnet** | 8453 | https://mainnet.base.org | [Blockscout](https://base.blockscout.com) | `0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913` |
+| **Arc Testnet** | 5042002 | https://rpc.testnet.arc.network | [ArcScan](https://testnet.arcscan.app) | `0x3600000000000000000000000000000000000000` |
+| **Arc Mainnet** | 5042000 | TBA | TBA | TBA |
+
+### Deployment Commands
+
+**One-Command Deploy (Recommended):**
+```bash
+# Base Sepolia (testnet)
+./script/deploy-and-verify.sh base-sepolia
+
+# Base Mainnet (production)
+./script/deploy-and-verify.sh base
+
+# Arc Testnet
+./script/deploy-and-verify.sh arc-testnet
+
+# Arc Mainnet
+./script/deploy-and-verify.sh arc
+```
+
+**Manual Deployment:**
+```bash
+# Deploy
+forge script script/DeployFactory.s.sol \
+  --rpc-url <RPC_URL> \
+  --private-key $PRIVATE_KEY \
   --broadcast \
-  --verify
+  -vvvv
 
-# 3. Extract deployment info
-node script/extractDeployment.js 84532
+# Verify
+./script/verify-contracts.sh <network>
 ```
 
-**Before deploying**, update metadata URIs in [script/DeployAuction.s.sol](script/DeployAuction.s.sol):
+### Configuration Options
+
+Default parameters in [DeployFactory.s.sol](script/DeployFactory.s.sol):
+
 ```solidity
-string[4] phaseURIs = [
-    "ipfs://YOUR_PHASE_0_CID/metadata.json",
-    "ipfs://YOUR_PHASE_1_CID/metadata.json",
-    "ipfs://YOUR_PHASE_2_CID/metadata.json",
-    "ipfs://YOUR_PHASE_3_CID/metadata.json"
-];
+Floor Price: $100,000 USDC
+Min Bid Increment: 5%
+Phase 0 Duration: 48 hours
+Phase 1 Duration: 24 hours
+Phase 2 Duration: 24 hours
 ```
 
-### Deployment Output
-The extraction script generates:
+To customize, edit the deployment script before running.
+
+### After Deployment
+
+**Extract contract addresses and ABIs:**
+```bash
+node script/extractDeployment.js all
 ```
-deployments/
-├── abi/
-│   ├── HouseNFT.json          # Contract ABI
-│   └── AuctionManager.json    # Contract ABI
-└── addresses.json              # All chain addresses
+
+This generates:
+- `deployments/addresses.json` - All addresses by chain
+- `deployments/abi/*.json` - Contract ABIs
+- `deployments/README.md` - Integration guide
+
+**Verify on explorer:**
+- All contracts are automatically verified on Blockscout
+- If verification fails, retry: `./script/verify-contracts.sh <network>`
+
+### Troubleshooting
+
+| Issue | Solution |
+|-------|----------|
+| "Insufficient funds for gas" | Fund your wallet with network's native currency |
+| "USDC address not configured" | Deploy to a supported network |
+| "Verification failed" | Wait 30s and run `./script/verify-contracts.sh <network>` |
+| "Network not supported" | Use: `base-sepolia`, `base`, `arc-testnet`, or `arc` |
+
+## 🌐 Deployed Contracts
+
+The system is deployed on multiple networks. All contracts are verified on Blockscout.
+
+### Networks
+
+| Network | Chain ID | Status | Explorer |
+|---------|----------|--------|----------|
+| **Base Sepolia** | 84532 | ✅ Deployed | [Blockscout](https://base-sepolia.blockscout.com) |
+| **Base Mainnet** | 8453 | ✅ Deployed | [Blockscout](https://base.blockscout.com) |
+| **Arc Testnet** | 5042002 | ✅ Deployed | [ArcScan](https://testnet.arcscan.app) |
+| **Arc Mainnet** | 5042000 | 🔜 Coming Soon | TBA |
+
+### Contract Addresses
+
+<details>
+<summary><b>Base Sepolia (Testnet)</b></summary>
+
+| Contract | Address |
+|----------|---------|
+| **HouseNFT** | [`0xe23157f7d8ad43bfcf7aaff64257fd0fa17177d6`](https://base-sepolia.blockscout.com/address/0xe23157f7d8ad43bfcf7aaff64257fd0fa17177d6) |
+| **AuctionFactory** | [`0xd3390e5fec170d7577c850f5687a6542b66a4bbd`](https://base-sepolia.blockscout.com/address/0xd3390e5fec170d7577c850f5687a6542b66a4bbd) |
+| **AuctionManager** | [`0x3347f6a853e04281daa0314f49a76964f010366f`](https://base-sepolia.blockscout.com/address/0x3347f6a853e04281daa0314f49a76964f010366f) |
+
+</details>
+
+<details>
+<summary><b>Base Mainnet (Production)</b></summary>
+
+| Contract | Address |
+|----------|---------|
+| **HouseNFT** | [`0x335845ef4f622145d963c9f39d6ff1b60757fee4`](https://base.blockscout.com/address/0x335845ef4f622145d963c9f39d6ff1b60757fee4) |
+| **AuctionFactory** | [`0x57cdf2cdeae3f54e598e8def3583a251fec0eaf7`](https://base.blockscout.com/address/0x57cdf2cdeae3f54e598e8def3583a251fec0eaf7) |
+| **AuctionManager** | [`0xe6afb32fdd1c03edd3dc2f1b0037c3d4580d6dca`](https://base.blockscout.com/address/0xe6afb32fdd1c03edd3dc2f1b0037c3d4580d6dca) |
+
+</details>
+
+<details>
+<summary><b>Arc Testnet</b></summary>
+
+| Contract | Address |
+|----------|---------|
+| **HouseNFT** | [`0x335845ef4f622145d963c9f39d6ff1b60757fee4`](https://testnet.arcscan.app/address/0x335845ef4f622145d963c9f39d6ff1b60757fee4) |
+| **AuctionFactory** | [`0x57cdf2cdeae3f54e598e8def3583a251fec0eaf7`](https://testnet.arcscan.app/address/0x57cdf2cdeae3f54e598e8def3583a251fec0eaf7) |
+| **AuctionManager** | [`0xe6afb32fdd1c03edd3dc2f1b0037c3d4580d6dca`](https://testnet.arcscan.app/address/0xe6afb32fdd1c03edd3dc2f1b0037c3d4580d6dca) |
+
+</details>
+
+### Integration Resources
+
+```bash
+# Extract latest deployment info and ABIs
+node script/extractDeployment.js all
+```
+
+**Deployment artifacts available:**
+- [`deployments/addresses.json`](deployments/addresses.json) - All contract addresses by chain
+- [`deployments/abi/`](deployments/abi/) - Contract ABIs for integration
+- [`deployments/README.md`](deployments/README.md) - Detailed deployment documentation
+
+**Example usage:**
+```javascript
+const addresses = require('./deployments/addresses.json');
+const auctionAbi = require('./deployments/abi/AuctionManager.json');
+
+// Get contract for Base Sepolia
+const chainId = '84532';
+const auctionAddress = addresses[chainId].contracts.AuctionManager;
 ```
 
 ## Testing
@@ -260,6 +397,7 @@ event RefundWithdrawn(address indexed bidder, uint256 amount);
 ## Documentation Structure
 
 - **[README.md](README.md)** (this file) - Overview, quick start, deployment
+- **[AUCTION-FLOW.md](AUCTION-FLOW.md)** - Visual guide for admin and user workflows
 - **[CONTRACT-REFERENCE.md](CONTRACT-REFERENCE.md)** - Complete API documentation
 
 ## Development

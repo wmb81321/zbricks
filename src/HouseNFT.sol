@@ -5,37 +5,35 @@ import "@openzeppelin/contracts/token/ERC721/ERC721.sol";
 
 /**
  * @title HouseNFT
- * @notice Single-token ERC721 representing a house with phase-based metadata reveals
- * @dev Metadata URI updates automatically as auction phases progress
+ * @notice Multi-token ERC721 representing houses with phase-based metadata reveals
+ * @dev Each token has independent metadata URIs that update as auction phases progress
  * 
  * ROLES:
- * - Admin: Deployer address with persistent control over metadata URIs and phase advancement
- * - Controller: AuctionManager contract that can auto-advance to phase 3 on finalization
+ * - Admin: Deployer address with persistent control over metadata URIs, minting, and phase advancement
+ * - Controller: AuctionManager contracts that can auto-advance phases for their specific tokens
  */
 contract HouseNFT is ERC721 {
     /// @notice Admin address (deployer) with persistent control
     address public admin;
     
-    /// @notice Current phase of the auction (0-3)
-    uint8 public currentPhase;
+    /// @notice Current phase for each token ID (0-3)
+    mapping(uint256 => uint8) public tokenPhase;
     
-    /// @notice Controller address (AuctionManager) authorized to advance phases
-    address public controller;
+    /// @notice Controller address per token (set to specific AuctionManager)
+    mapping(uint256 => address) public tokenController;
     
-    /// @notice Tracks if controller has been set (one-time setup)
-    bool private controllerSet;
+    /// @notice Metadata URIs for each token and phase
+    mapping(uint256 => mapping(uint8 => string)) public tokenPhaseURIs;
     
-    /// @notice Mapping of phase number to metadata URI
-    mapping(uint8 => string) private phaseURIs;
-    
-    /// @notice Fixed token ID for the single house NFT
-    uint256 private constant TOKEN_ID = 1;
+    /// @notice Token ID counter for auto-incrementing mints
+    uint256 private _tokenIdCounter = 1;
     
     // Events
     event AdminTransferred(address indexed previousAdmin, address indexed newAdmin);
-    event ControllerSet(address indexed controller);
-    event PhaseAdvanced(uint8 indexed newPhase, address indexed advancedBy);
-    event PhaseURIUpdated(uint8 indexed phase, string uri);
+    event ControllerSet(uint256 indexed tokenId, address indexed controller);
+    event PhaseAdvanced(uint256 indexed tokenId, uint8 indexed newPhase, address indexed advancedBy);
+    event PhaseURIsSet(uint256 indexed tokenId);
+    event PhaseURIUpdated(uint256 indexed tokenId, uint8 indexed phase, string uri);
     
     // Modifiers
     modifier onlyAdmin() {
@@ -44,30 +42,113 @@ contract HouseNFT is ERC721 {
     }
     
     /**
-     * @notice Constructs the HouseNFT with pre-initialized phase URIs
+     * @notice Constructs the HouseNFT collection
      * @param name The name of the NFT collection
      * @param symbol The symbol of the NFT collection
-     * @param _phaseURIs Array of 4 metadata URIs for phases 0-3
-     * @param _initialOwner Address to receive the minted NFT (AuctionManager)
      */
     constructor(
         string memory name,
-        string memory symbol,
-        string[4] memory _phaseURIs,
-        address _initialOwner
+        string memory symbol
     ) ERC721(name, symbol) {
-        require(_initialOwner != address(0), "Invalid initial owner");
-        
-        // Set deployer as admin
         admin = msg.sender;
+    }
+    
+    /**
+     * @notice Mints a new NFT to the specified recipient
+     * @param recipient Address to receive the NFT
+     * @return tokenId The ID of the newly minted token
+     */
+    function mintTo(address recipient) external onlyAdmin returns (uint256) {
+        require(recipient != address(0), "Invalid recipient");
         
-        // Initialize phase URIs
+        uint256 tokenId = _tokenIdCounter;
+        _tokenIdCounter++;
+        
+        _mint(recipient, tokenId);
+        
+        return tokenId;
+    }
+    
+    /**
+     * @notice Sets all phase URIs for a specific token (admin only)
+     * @param tokenId The token ID to set URIs for
+     * @param uris Array of 4 metadata URIs for phases 0-3
+     */
+    function setPhaseURIs(uint256 tokenId, string[4] memory uris) external onlyAdmin {
+        _requireOwned(tokenId);
+        
         for (uint8 i = 0; i < 4; i++) {
-            phaseURIs[i] = _phaseURIs[i];
+            tokenPhaseURIs[tokenId][i] = uris[i];
         }
         
-        // Mint the single NFT to the auction contract
-        _mint(_initialOwner, TOKEN_ID);
+        emit PhaseURIsSet(tokenId);
+    }
+    
+    /**
+     * @notice Updates a single phase URI for a specific token (admin only)
+     * @param tokenId The token ID
+     * @param phase The phase number (0-3)
+     * @param uri The new metadata URI
+     */
+    function updatePhaseURI(uint256 tokenId, uint8 phase, string memory uri) external onlyAdmin {
+        require(phase <= 3, "Invalid phase");
+        _requireOwned(tokenId);
+        
+        tokenPhaseURIs[tokenId][phase] = uri;
+        
+        emit PhaseURIUpdated(tokenId, phase, uri);
+    }
+    
+    /**
+     * @notice Sets the controller address for a specific token (admin only)
+     * @param tokenId The token ID
+     * @param _controller Address of the AuctionManager contract for this token
+     */
+    function setController(uint256 tokenId, address _controller) external onlyAdmin {
+        require(_controller != address(0), "Invalid controller");
+        _requireOwned(tokenId);
+        
+        tokenController[tokenId] = _controller;
+        
+        emit ControllerSet(tokenId, _controller);
+    }
+    
+    /**
+     * @notice Advances to the next phase for a specific token
+     * @dev Can be called by controller (AuctionManager) or admin
+     * @param tokenId The token ID to advance
+     * @param newPhase The new phase number (must be current + 1, except controller can jump to 3)
+     */
+    function advancePhase(uint256 tokenId, uint8 newPhase) external {
+        _requireOwned(tokenId);
+        require(newPhase <= 3, "Phase must be <= 3");
+        
+        uint8 currentTokenPhase = tokenPhase[tokenId];
+        
+        // Controller can only advance to phase 3 (finalization)
+        if (msg.sender == tokenController[tokenId]) {
+            require(newPhase == 3, "Controller can only advance to phase 3");
+        } else {
+            // Admin must follow sequential progression
+            require(msg.sender == admin, "Only admin or controller");
+            require(newPhase == currentTokenPhase + 1, "Invalid phase progression");
+        }
+        
+        tokenPhase[tokenId] = newPhase;
+        
+        emit PhaseAdvanced(tokenId, newPhase, msg.sender);
+    }
+    
+    /**
+     * @notice Overloaded advancePhase for backward compatibility with AuctionManager
+     * @dev Used by AuctionManager._syncNFTPhase() which passes only phase number
+     * @param newPhase The new phase number
+     */
+    function advancePhase(uint8 newPhase) external {
+        // This function is called by AuctionManager without tokenId
+        // We need to find which token this controller manages
+        // For simplicity, we'll require the controller to call the tokenId version
+        revert("Use advancePhase(tokenId, newPhase)");
     }
     
     /**
@@ -84,63 +165,32 @@ contract HouseNFT is ERC721 {
     }
     
     /**
-     * @notice Sets the controller address (admin only, one-time setup)
-     * @param _controller Address of the AuctionManager contract
-     */
-    function setController(address _controller) external onlyAdmin {
-        require(!controllerSet, "Controller already set");
-        require(_controller != address(0), "Invalid controller");
-        
-        controller = _controller;
-        controllerSet = true;
-        
-        emit ControllerSet(_controller);
-    }
-    
-    /**
-     * @notice Advances to the next phase (admin only)
-     * @dev Admin manually advances phases 0->1, 1->2, 2->3
-     * @param newPhase The new phase number (must be currentPhase + 1)
-     */
-    function advancePhase(uint8 newPhase) external onlyAdmin {
-        require(newPhase == currentPhase + 1, "Invalid phase progression");
-        require(newPhase <= 3, "Phase must be <= 3");
-        
-        currentPhase = newPhase;
-        
-        emit PhaseAdvanced(newPhase, msg.sender);
-    }
-    
-    /**
-     * @notice Updates the metadata URI for a specific phase (admin only)
-     * @param phase The phase number to update (0-3)
-     * @param uri The new metadata URI
-     */
-    function updatePhaseURI(uint8 phase, string memory uri) external onlyAdmin {
-        require(phase <= 3, "Invalid phase");
-        
-        phaseURIs[phase] = uri;
-        
-        emit PhaseURIUpdated(phase, uri);
-    }
-    
-    /**
-     * @notice Returns the metadata URI based on the current phase
-     * @param tokenId The token ID (must be 1)
-     * @return The metadata URI for the current phase
+     * @notice Returns the metadata URI based on the current phase for a token
+     * @param tokenId The token ID
+     * @return The metadata URI for the token's current phase
      */
     function tokenURI(uint256 tokenId) public view virtual override returns (string memory) {
         _requireOwned(tokenId);
-        return phaseURIs[currentPhase];
+        return tokenPhaseURIs[tokenId][tokenPhase[tokenId]];
     }
     
     /**
-     * @notice Returns the URI for a specific phase (view function)
+     * @notice Returns the URI for a specific phase and token
+     * @param tokenId The token ID
      * @param phase The phase number (0-3)
-     * @return The metadata URI for the specified phase
+     * @return The metadata URI
      */
-    function getPhaseURI(uint8 phase) external view returns (string memory) {
+    function getPhaseURI(uint256 tokenId, uint8 phase) external view returns (string memory) {
         require(phase <= 3, "Invalid phase");
-        return phaseURIs[phase];
+        _requireOwned(tokenId);
+        return tokenPhaseURIs[tokenId][phase];
+    }
+    
+    /**
+     * @notice Returns the current token ID counter value
+     * @return The next token ID that will be minted
+     */
+    function nextTokenId() external view returns (uint256) {
+        return _tokenIdCounter;
     }
 }

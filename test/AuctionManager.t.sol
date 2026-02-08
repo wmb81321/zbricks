@@ -36,23 +36,39 @@ contract AuctionManagerTest is Test {
         // Deploy mock USDC
         usdc = new MockUSDC();
         
-        // Deploy HouseNFT (will be owned by auction contract)
-        // We need to deploy auction first, so we'll do it in two steps
+        // Deploy HouseNFT
+        nft = new HouseNFT("Test House", "HOUSE");
         
-        // First deploy with temporary owner
-        nft = new HouseNFT("Test House", "HOUSE", phaseURIs, address(this));
+        // Mint NFT to this contract temporarily
+        uint256 tokenId = nft.mintTo(address(this));
         
-        // Deploy auction
+        // Set phase URIs for the token
+        nft.setPhaseURIs(tokenId, phaseURIs);
+        
+        // Calculate next contract address for auction deployment
+        uint256 nonce = vm.getNonce(address(this));
+        address predictedAuction = computeCreateAddress(address(this), nonce);
+        
+        // Transfer NFT to predicted auction address
+        nft.transferFrom(address(this), predictedAuction, tokenId);
+        
+        // Deploy auction with correct parameters
         auction = new AuctionManager(
-            address(usdc),
-            address(nft),
-            admin,
-            phaseDurations
+            admin,                    // initialOwner
+            address(usdc),           // paymentToken
+            address(nft),            // nftContract
+            tokenId,                 // tokenId
+            phaseDurations,          // phaseDurations
+            1000e6,                  // floorPrice (1000 USDC)
+            5,                       // minBidIncrementPercent (5%)
+            true                     // enforceMinIncrement
         );
         
-        // Transfer NFT to auction and set controller
-        nft.transferFrom(address(this), address(auction), 1);
-        nft.setController(address(auction));
+        // Verify auction address matches prediction
+        require(address(auction) == predictedAuction, "Address mismatch");
+        
+        // Set auction as controller for the token
+        nft.setController(tokenId, address(auction));
         
         // Mint USDC to bidders
         usdc.mint(bidder1, 10_000_000e6); // 10M USDC
@@ -86,7 +102,7 @@ contract AuctionManagerTest is Test {
         auction.placeBid(1000e6);
         
         vm.prank(bidder2);
-        vm.expectRevert("Bid too low");
+        vm.expectRevert("Bid increment too low");
         auction.placeBid(1000e6); // Same amount
     }
     
@@ -99,10 +115,11 @@ contract AuctionManagerTest is Test {
         vm.prank(bidder2);
         auction.placeBid(2000e6);
         
-        // Check refund balance for bidder1
-        assertEq(auction.refundBalance(bidder1), 1000e6);
+        // Check that bidder1 is no longer leader
         assertEq(auction.currentLeader(), bidder2);
         assertEq(auction.currentHighBid(), 2000e6);
+        // bidder1's bid is still recorded
+        assertEq(auction.userBids(bidder1), 1000e6);
     }
     
     function testChecksEffectsInteractionsPattern() public {
@@ -157,18 +174,18 @@ contract AuctionManagerTest is Test {
         vm.prank(bidder2);
         auction.placeBid(2000e6);
         
-        // Bidder1 withdraws refund
+        // Bidder1 withdraws bid
         uint256 balanceBefore = usdc.balanceOf(bidder1);
         
         vm.prank(bidder1);
-        auction.withdraw();
+        auction.withdrawBid();
         
         uint256 balanceAfter = usdc.balanceOf(bidder1);
         assertEq(balanceAfter - balanceBefore, 1000e6);
-        assertEq(auction.refundBalance(bidder1), 0);
+        assertEq(auction.userBids(bidder1), 0);
     }
     
-    function testWithdrawWorksWhenPaused() public {
+    function testCannotWithdrawWhenPaused() public {
         // Place two bids
         vm.prank(bidder1);
         auction.placeBid(1000e6);
@@ -180,14 +197,13 @@ contract AuctionManagerTest is Test {
         vm.prank(admin);
         auction.pause();
         
-        // Bidder1 can still withdraw (emergency fund access)
+        // Bidder1 cannot withdraw when paused (contract is paused)
         vm.prank(bidder1);
-        auction.withdraw();
-        
-        assertEq(usdc.balanceOf(bidder1), 10_000_000e6); // Full amount back
+        vm.expectRevert(Pausable.EnforcedPause.selector);
+        auction.withdrawBid();
     }
     
-    function testWithdrawAfterFinalization() public {
+    function testCannotWithdrawAfterFinalization() public {
         // Place bids  
         vm.prank(bidder1);
         auction.placeBid(1000e6);
@@ -208,17 +224,16 @@ contract AuctionManagerTest is Test {
         vm.prank(admin);
         auction.finalizeAuction();
         
-        // Bidder1 can still withdraw after finalization
+        // Bidder1 cannot withdraw after finalization (auction ended)
         vm.prank(bidder1);
-        auction.withdraw();
-        
-        assertEq(auction.refundBalance(bidder1), 0);
+        vm.expectRevert("Auction ended - cannot withdraw");
+        auction.withdrawBid();
     }
     
     function testCannotWithdrawZeroBalance() public {
         vm.prank(bidder1);
-        vm.expectRevert("No refund");
-        auction.withdraw();
+        vm.expectRevert("No bid to withdraw");
+        auction.withdrawBid();
     }
     
     // ============ Phase Advancement Tests ============
@@ -290,14 +305,16 @@ contract AuctionManagerTest is Test {
         vm.warp(block.timestamp + 48 hours);
         
         vm.prank(bidder1);
-        vm.expectRevert("Only admin");
+        vm.expectRevert(abi.encodeWithSignature("OwnableUnauthorizedAccount(address)", bidder1));
         auction.advancePhase();
     }
     
     function testNFTMetadataUpdatesOnAdvance() public {
+        uint256 tokenId = auction.tokenId();
+        
         // Check initial phase
-        assertEq(nft.currentPhase(), 0);
-        assertEq(nft.tokenURI(1), "ipfs://phase0");
+        assertEq(nft.tokenPhase(tokenId), 0);
+        assertEq(nft.tokenURI(tokenId), "ipfs://phase0");
         
         // Advance auction phase
         vm.warp(block.timestamp + 48 hours);
@@ -305,11 +322,11 @@ contract AuctionManagerTest is Test {
         auction.advancePhase();
         
         // Admin must manually advance NFT metadata
-        nft.advancePhase(1);
+        nft.advancePhase(tokenId, 1);
         
         // Check updated phase
-        assertEq(nft.currentPhase(), 1);
-        assertEq(nft.tokenURI(1), "ipfs://phase1");
+        assertEq(nft.tokenPhase(tokenId), 1);
+        assertEq(nft.tokenURI(tokenId), "ipfs://phase1");
     }
     
     // ============ Finalization Tests ============
@@ -446,28 +463,28 @@ contract AuctionManagerTest is Test {
         auction.withdrawProceeds();
     }
     
-    function testTransferAdmin() public {
-        address newAdmin = address(5);
+    function testTransferOwnership() public {
+        address newOwner = address(5);
         
         vm.prank(admin);
-        auction.transferAdmin(newAdmin);
+        auction.transferOwnership(newOwner);
         
-        assertEq(auction.admin(), newAdmin);
+        assertEq(auction.owner(), newOwner);
         
-        // Old admin cannot perform admin actions
+        // Old admin cannot perform owner actions
         vm.prank(admin);
-        vm.expectRevert("Only admin");
+        vm.expectRevert(abi.encodeWithSignature("OwnableUnauthorizedAccount(address)", admin));
         auction.pause();
         
-        // New admin can
-        vm.prank(newAdmin);
+        // New owner can
+        vm.prank(newOwner);
         auction.pause();
     }
     
     function testCannotTransferAdminToZeroAddress() public {
         vm.prank(admin);
-        vm.expectRevert("Invalid admin");
-        auction.transferAdmin(address(0));
+        vm.expectRevert(abi.encodeWithSignature("OwnableInvalidOwner(address)", address(0)));
+        auction.transferOwnership(address(0));
     }
     
     // ============ Pause Tests ============
@@ -486,7 +503,7 @@ contract AuctionManagerTest is Test {
     
     function testOnlyAdminCanPause() public {
         vm.prank(bidder1);
-        vm.expectRevert("Only admin");
+        vm.expectRevert(abi.encodeWithSignature("OwnableUnauthorizedAccount(address)", bidder1));
         auction.pause();
     }
     
@@ -499,15 +516,16 @@ contract AuctionManagerTest is Test {
         assertGt(startTime, 0);
     }
     
-    function testGetBidderRefund() public {
+    function testGetBidderBid() public {
         vm.prank(bidder1);
         auction.placeBid(1000e6);
         
         vm.prank(bidder2);
         auction.placeBid(2000e6);
         
-        assertEq(auction.getBidderRefund(bidder1), 1000e6);
-        assertEq(auction.getBidderRefund(bidder2), 0);
+        // Check bids in the system
+        assertEq(auction.userBids(bidder1), 1000e6);
+        assertEq(auction.userBids(bidder2), 2000e6);
     }
     
     function testIsAuctionActive() public {
@@ -550,7 +568,7 @@ contract AuctionManagerTest is Test {
     // ============ Fuzz Tests ============
     
     function testFuzzBidAmount(uint256 amount) public {
-        amount = bound(amount, 1e6, 1_000_000_000e6); // 1 USDC to 1B USDC
+        amount = bound(amount, 1000e6, 1_000_000_000e6); // floor price (1000 USDC) to 1B USDC
         
         usdc.mint(address(this), amount);
         usdc.approve(address(auction), amount);
@@ -563,9 +581,10 @@ contract AuctionManagerTest is Test {
     
     function testFuzzMultipleBids(uint256 bid1, uint256 bid2, uint256 bid3) public {
         // Bound bids to reasonable amounts within bidders' balances
-        bid1 = bound(bid1, 1e6, 1_000_000e6); // 1 USDC to 1M USDC
-        bid2 = bound(bid2, bid1 + 1, 2_000_000e6); // Must be higher than bid1, up to 2M
-        bid3 = bound(bid3, bid2 + 1, 3_000_000e6); // Must be higher than bid2, up to 3M
+        // Floor price is 1000 USDC, 5% minimum increment
+        bid1 = bound(bid1, 1000e6, 1_000_000e6); // floor price to 1M USDC
+        bid2 = bound(bid2, bid1 + (bid1 * 5 / 100), 2_000_000e6); // Must be 5% higher than bid1
+        bid3 = bound(bid3, bid2 + (bid2 * 5 / 100), 3_000_000e6); // Must be 5% higher than bid2
         
         vm.prank(bidder1);
         auction.placeBid(bid1);
@@ -576,8 +595,8 @@ contract AuctionManagerTest is Test {
         vm.prank(bidder3);
         auction.placeBid(bid3);
         
-        assertEq(auction.refundBalance(bidder1), bid1);
-        assertEq(auction.refundBalance(bidder2), bid2);
+        assertEq(auction.userBids(bidder1), bid1);
+        assertEq(auction.userBids(bidder2), bid2);
         assertEq(auction.currentLeader(), bidder3);
         assertEq(auction.currentHighBid(), bid3);
     }
