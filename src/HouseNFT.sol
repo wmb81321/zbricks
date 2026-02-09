@@ -10,11 +10,15 @@ import "@openzeppelin/contracts/token/ERC721/ERC721.sol";
  * 
  * ROLES:
  * - Admin: Deployer address with persistent control over metadata URIs, minting, and phase advancement
+ * - Trusted Factory: AuctionFactory contract that can set controllers for automation
  * - Controller: AuctionManager contracts that can auto-advance phases for their specific tokens
  */
 contract HouseNFT is ERC721 {
     /// @notice Admin address (deployer) with persistent control
     address public admin;
+    
+    /// @notice Trusted factory address that can set controllers (set once, immutable after)
+    address public trustedFactory;
     
     /// @notice Current phase for each token ID (0-3)
     mapping(uint256 => uint8) public tokenPhase;
@@ -30,6 +34,7 @@ contract HouseNFT is ERC721 {
     
     // Events
     event AdminTransferred(address indexed previousAdmin, address indexed newAdmin);
+    event FactorySet(address indexed factory);
     event ControllerSet(uint256 indexed tokenId, address indexed controller);
     event PhaseAdvanced(uint256 indexed tokenId, uint8 indexed newPhase, address indexed advancedBy);
     event PhaseURIsSet(uint256 indexed tokenId);
@@ -100,12 +105,29 @@ contract HouseNFT is ERC721 {
     }
     
     /**
-     * @notice Sets the controller address for a specific token (admin only)
+     * @notice Sets the trusted factory address (one-time setup, admin only)
+     * @dev Can only be called once when trustedFactory is address(0)
+     * @param _factory Address of the AuctionFactory contract
+     */
+    function setFactory(address _factory) external onlyAdmin {
+        require(trustedFactory == address(0), "Factory already set");
+        require(_factory != address(0), "Invalid factory address");
+        
+        trustedFactory = _factory;
+        
+        emit FactorySet(_factory);
+    }
+    
+    /**
+     * @notice Sets the controller address for a specific token (admin or factory)
+     * @dev Factory can set controllers to enable automated phase advancement
      * @param tokenId The token ID
      * @param _controller Address of the AuctionManager contract for this token
      */
-    function setController(uint256 tokenId, address _controller) external onlyAdmin {
-        require(_controller != address(0), "Invalid controller");
+    function setController(uint256 tokenId, address _controller) external {        require(
+            msg.sender == admin || msg.sender == trustedFactory,
+            "Only admin or factory"
+        );        require(_controller != address(0), "Invalid controller");
         _requireOwned(tokenId);
         
         tokenController[tokenId] = _controller;

@@ -69,7 +69,7 @@ contract HouseNFTTest is Test {
     
     function testNonAdminCannotSetController() public {
         vm.prank(user);
-        vm.expectRevert("Only admin");
+        vm.expectRevert("Only admin or factory");
         nft.setController(1, controller);
     }
     
@@ -317,5 +317,68 @@ contract HouseNFTTest is Test {
         vm.expectEmit(true, true, false, true);
         emit HouseNFT.PhaseURIUpdated(1, 0, "ipfs://new");
         nft.updatePhaseURI(1, 0, "ipfs://new");
+    }
+    
+    // ============ Factory Trust System Tests ============
+    
+    function testSetFactory() public {
+        address factory = address(0x999);
+        
+        // Admin can set factory once
+        vm.prank(admin);
+        nft.setFactory(factory);
+        
+        assertEq(nft.trustedFactory(), factory);
+    }
+    
+    function testCannotSetFactoryTwice() public {
+        address factory1 = address(0x888);
+        address factory2 = address(0x999);
+        
+        // Set factory first time
+        vm.prank(admin);
+        nft.setFactory(factory1);
+        
+        // Try to set again - should fail
+        vm.prank(admin);
+        vm.expectRevert("Factory already set");
+        nft.setFactory(factory2);
+    }
+    
+    function testCannotSetFactoryToZero() public {
+        vm.prank(admin);
+        vm.expectRevert("Invalid factory address");
+        nft.setFactory(address(0));
+    }
+    
+    function testOnlyAdminCanSetFactory() public {
+        vm.prank(user);
+        vm.expectRevert("Only admin");
+        nft.setFactory(address(0x999));
+    }
+    
+    function testFactoryCanSetController() public {
+        address factory = address(0x888);
+        address newController = address(0x777);
+        
+        // Set factory
+        vm.prank(admin);
+        nft.setFactory(factory);
+        
+        // Factory should be able to set controller
+        vm.prank(factory);
+        nft.setController(1, newController);
+        
+        assertEq(nft.tokenController(1), newController);
+    }
+    
+    function testFactoryCannotSetControllerBeforeSetup() public {
+        address factory = address(0x888);
+        address newController = address(0x777);
+        
+        // Factory not set yet, so factory address cannot set controller
+        vm.prank(factory);
+        vm.expectRevert("Only admin or factory");
+        nft.setController(1, newController);
     }
 }

@@ -8,7 +8,8 @@ set -e
 # Load .env file if it exists
 if [ -f .env ]; then
     echo "📄 Loading environment from .env file..."
-    export $(grep -v '^#' .env | xargs)
+    # Export only valid variable assignments, stripping inline comments
+    export $(grep -v '^#' .env | sed 's/#.*//' | grep '=' | xargs)
 fi
 
 NETWORK=$1
@@ -75,9 +76,18 @@ fi
 echo "📄 Using deployment file: $DEPLOYMENT_FILE"
 echo ""
 
+# Check for private key
+if [ -z "$PRIVATE_KEY" ]; then
+    echo "❌ Error: PRIVATE_KEY environment variable not set"
+    echo "Set it in .env file or export PRIVATE_KEY=your_private_key"
+    exit 1
+fi
+
 # Verify using the deployment file
 forge script script/DeployFactory.s.sol \
     --rpc-url $RPC_URL \
+    --private-key $PRIVATE_KEY \
+    --broadcast \
     --resume \
     --verify \
     --verifier blockscout \

@@ -3,13 +3,21 @@ pragma solidity ^0.8.13;
 
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "./AuctionManager.sol";
+import "./HouseNFT.sol";
 
 /**
  * @title AuctionFactory
  * @notice Factory contract for deploying independent AuctionManager instances
  * @dev Owner-controlled factory that creates new auction contracts with configurable parameters
+ * @dev Factory is set as trusted in HouseNFT to enable automated controller setup
  */
 contract AuctionFactory is Ownable {
+    
+    /// @notice HouseNFT contract (immutable)
+    HouseNFT public immutable nftContract;
+    
+    /// @notice Payment token contract (immutable, typically USDC)
+    IERC20 public immutable paymentToken;
     
     /// @notice Array of all deployed auction addresses
     address[] public auctions;
@@ -36,16 +44,27 @@ contract AuctionFactory is Ownable {
     /**
      * @notice Constructs the AuctionFactory
      * @param initialOwner The address that will own the factory
+     * @param _nftContract Address of the HouseNFT contract
+     * @param _paymentToken Address of the payment token (e.g., USDC)
      */
-    constructor(address initialOwner) Ownable(initialOwner) {}
+    constructor(
+        address initialOwner,
+        address _nftContract,
+        address _paymentToken
+    ) Ownable(initialOwner) {
+        require(_nftContract != address(0), "Invalid NFT contract");
+        require(_paymentToken != address(0), "Invalid payment token");
+        
+        nftContract = HouseNFT(_nftContract);
+        paymentToken = IERC20(_paymentToken);
+    }
     
     /**
      * @notice Creates a new independent auction instance
+     * @dev Atomically: deploys auction, sets controller, transfers NFT
      * @param _admin Owner address for the new auction
-     * @param _paymentToken Payment token contract (e.g., USDC)
-     * @param _nftContract NFT contract to auction
-     * @param _tokenId Token ID of the NFT (must already be transferred to the new auction address)
-     * @param _phaseDurations Array of 3 phase durations in seconds (each must be > 0)
+     * @param _tokenId Token ID of the NFT (must be owned by factory)
+     * @param _phaseDurations Array of 4 phase durations in seconds (phase 3 duration not used)
      * @param _floorPrice Minimum first bid amount
      * @param _minBidIncrementPercent Minimum bid increment percentage (1-100)
      * @param _enforceMinIncrement Whether to enforce the minimum increment
@@ -55,8 +74,6 @@ contract AuctionFactory is Ownable {
      */
     function createAuction(
         address _admin,
-        address _paymentToken,
-        address _nftContract,
         uint256 _tokenId,
         uint256[4] memory _phaseDurations,
         uint256 _floorPrice,
@@ -65,11 +82,17 @@ contract AuctionFactory is Ownable {
         uint256 _participationFee,
         address _treasury
     ) external onlyOwner returns (address) {
+        // Security: Verify factory owns the NFT before proceeding
+        require(
+            nftContract.ownerOf(_tokenId) == address(this),
+            "Factory must own NFT"
+        );
+        
         // Deploy new AuctionManager instance
         AuctionManager newAuction = new AuctionManager(
             _admin,
-            _paymentToken,
-            _nftContract,
+            address(paymentToken),
+            address(nftContract),
             _tokenId,
             _phaseDurations,
             _floorPrice,
@@ -81,6 +104,12 @@ contract AuctionFactory is Ownable {
         
         address auctionAddress = address(newAuction);
         
+        // Security: Set controller BEFORE transferring NFT (atomic operation)
+        nftContract.setController(_tokenId, auctionAddress);
+        
+        // Security: Transfer NFT from factory to auction (escrow)
+        nftContract.transferFrom(address(this), auctionAddress, _tokenId);
+        
         // Store auction address
         auctions.push(auctionAddress);
         isAuction[auctionAddress] = true;
@@ -88,9 +117,9 @@ contract AuctionFactory is Ownable {
         // Emit comprehensive event with all parameters
         emit AuctionCreated(
             auctionAddress,
-            _nftContract,
+            address(nftContract),
             _tokenId,
-            _paymentToken,
+            address(paymentToken),
             _admin,
             _phaseDurations,
             _floorPrice,

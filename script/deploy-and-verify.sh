@@ -8,7 +8,8 @@ set -e
 # Load .env file if it exists
 if [ -f .env ]; then
     echo "📄 Loading environment from .env file..."
-    export $(grep -v '^#' .env | xargs)
+    # Export only valid variable assignments, stripping inline comments
+    export $(grep -v '^#' .env | sed 's/#.*//' | grep '=' | xargs)
 fi
 
 NETWORK=$1

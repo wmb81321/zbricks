@@ -4,12 +4,17 @@
 
 Complete guide to the multi-phase Continuous Clearing Auction (CCA) mechanism used in the ZBrick real estate tokenization system.
 
+**Collection**: ZBRICKS (ZBR)  
+**Architecture**: Factory-based multi-auction system  
+**Last Updated**: February 9, 2026
+
 ---
 
 ## Table of Contents
 
 1. [Overview](#overview)
-2. [Auction Phases](#auction-phases)
+2. [Deployment Architecture](#deployment-architecture)
+3. [Auction Phases](#auction-phases)
    - [Phase 0: Initial Reveal](#phase-0-initial-reveal-48-hours)
    - [Phase 1: Second Reveal](#phase-1-second-reveal-24-hours)
    - [Phase 2: Final Reveal](#phase-2-final-reveal-24-hours)
@@ -54,6 +59,93 @@ The ZBrick auction system implements a **4-phase Continuous Clearing Auction (CC
 - 💸 **Pull Withdrawals**: Users can withdraw anytime before finalization
 - ⏸️ **Emergency Pause**: Owner can pause for safety
 - 🚨 **Emergency Withdrawal**: Owner can withdraw funds anytime for emergencies
+
+---
+
+## Deployment Architecture
+
+### Factory-Based System
+
+The ZBrick auction system uses a **factory pattern** for efficient multi-property deployment:
+
+#### One-Time Infrastructure (Per Network)
+
+```bash
+# Deploy HouseNFT (ZBRICKS) and AuctionFactory once
+forge script script/DeployFactory.s.sol:DeployFactory \
+    --rpc-url <network> --broadcast --verify
+```
+
+**Deploys:**
+1. `HouseNFT` ("ZBRICKS", "ZBR") - Multi-token NFT contract
+2. `AuctionFactory` - Auction deployment factory with immutable references
+3. Automatically sets factory as trusted in NFT contract via `setFactory()`
+
+**Result:** Shared infrastructure ready for multiple independent auctions
+
+#### Per-Property Auction Creation
+
+```bash
+# Update CreateAuction.s.sol with property parameters, then:
+forge script script/CreateAuction.s.sol:CreateAuction \
+    --rpc-url <network> --broadcast
+```
+
+**Configuration (in script):**
+- Floor price (e.g., $10M)
+- Phase durations (e.g., 7/14/30 days)
+- Participation fee (e.g., $1000)
+- Treasury address (Gnosis Safe)
+- Admin address (controls phases)
+- Phase URIs (IPFS metadata)
+
+**Atomic Process:**
+1. ✅ Mint NFT to factory (`nft.mintTo(factory)`)
+2. ✅ Set 4 phase URIs for metadata reveals
+3. ✅ Call `factory.createAuction()`:
+   - Verifies factory owns NFT
+   - Deploys new AuctionManager
+   - Sets controller via trusted factory
+   - Transfers NFT to auction
+4. ✅ Auction ready for bidding
+
+**Result:** Independent auction with own parameters and treasury
+
+### Key Architecture Benefits
+
+- ⚙️ **Deploy Once, Create Many**: Infrastructure deployed once per network
+- 🛡️ **Security**: Atomic operations prevent partial states
+- 💸 **Cost Efficient**: Reuse shared contracts (NFT + payment token)
+- 🔐 **Access Control**: Factory trusted for controller setup, admin manages metadata
+- 🏠 **Independent Auctions**: Each property has isolated auction with own parameters
+- 🔄 **Scalable**: Easy to create multiple auctions without redeploying infrastructure
+
+### Trust Model
+
+```
+┌─────────────────────────────────────────────────┐
+│              Admin (from .env)                   │
+│  - Controls NFT metadata (phase URIs)           │
+│  - Sets factory (one-time only)                 │
+│  - Can transfer admin role to multisig          │
+└────────────────┬────────────────────────────────┘
+                 │
+                 ▼
+┌─────────────────────────────────────────────────┐
+│           Trusted Factory (immutable)            │
+│  - Can set controllers on NFTs                  │
+│  - Immutable NFT & payment token refs           │
+│  - Atomic auction creation                      │
+└────────────────┬────────────────────────────────┘
+                 │
+                 ▼
+┌─────────────────────────────────────────────────┐
+│        Per-Auction Admin (configurable)         │
+│  - Controls auction phases                      │
+│  - Manages pause/unpause                        │
+│  - Independent per property                     │
+└─────────────────────────────────────────────────┘
+```
 
 ---
 

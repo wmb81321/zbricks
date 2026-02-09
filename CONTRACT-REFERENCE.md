@@ -2,8 +2,9 @@
 
 Complete API documentation for the ZBrick Auction System contracts.
 
-> 📖 **Last Updated**: February 8, 2026  
+> 📖 **Last Updated**: February 9, 2026  
 > 📦 **Contract Addresses**: See [deployments/addresses.json](deployments/addresses.json)
+> 🏭 **Architecture**: Factory-based multi-auction system
 
 ## Table of Contents
 
@@ -16,9 +17,12 @@ Complete API documentation for the ZBrick Auction System contracts.
 
 ## HouseNFT
 
-Multi-token ERC721 representing houses with phase-based metadata reveals. Each token has independent metadata URIs that update as auction phases progress.
+Multi-token ERC721 representing properties with phase-based metadata reveals. Each token has independent metadata URIs that update as auction phases progress.
 
-**Inherits:** ERC721
+**Collection Name**: ZBRICKS  
+**Symbol**: ZBR  
+**Inherits:** ERC721  
+**Architecture**: Supports factory-based auction creation with trusted factory system
 
 ### Deployed Addresses
 
@@ -40,28 +44,32 @@ constructor(
 **Description**: Initializes the HouseNFT contract with name and symbol.
 
 **Parameters:**
-- `name`: Name of the NFT collection (e.g., "House NFT")
-- `symbol`: Symbol of the NFT collection (e.g., "HOUSE")
+- `name`: Name of the NFT collection ("ZBRICKS")
+- `symbol`: Symbol of the NFT collection ("ZBR")
 
 **Example:**
 ```solidity
-HouseNFT nft = new HouseNFT("House NFT", "HOUSE");
+HouseNFT nft = new HouseNFT("ZBRICKS", "ZBR");
 ```
 
 ### State Variables
 
 ```solidity
 address public admin;                                    // Admin with persistent control
+address public trustedFactory;                          // Factory allowed to set controllers
 mapping(uint256 => uint8) public tokenPhase;            // Current phase per token (0-3)
 mapping(uint256 => address) public tokenController;     // Controller per token (AuctionManager)
 mapping(uint256 => mapping(uint8 => string)) public tokenPhaseURIs;  // URIs per token per phase
+uint256 private _tokenIdCounter;                        // Auto-incrementing token ID counter
 ```
 
 **Description:**
-- `admin`: Deployer address with control over all functions
+- `admin`: Deployer address with control over metadata and admin functions
+- `trustedFactory`: Factory contract that can set controllers (set once, immutable)
 - `tokenPhase`: Current phase (0-3) for each token
 - `tokenController`: AuctionManager address that can advance phases for specific token
 - `tokenPhaseURIs`: Metadata URIs stored as `tokenPhaseURIs[tokenId][phase]`
+- `_tokenIdCounter`: Internal counter for auto-incrementing token IDs (starts at 1)
 
 ### Functions
 
@@ -94,23 +102,68 @@ cast send <NFT_ADDRESS> "mintTo(address)" <RECIPIENT_ADDRESS> \
 
 #### setController
 ```solidity
-function setController(uint256 tokenId, address controller) external onlyAdmin
+function setController(uint256 tokenId, address controller) external
 ```
 
-**Description**: Sets the controller address for a specific token (typically the AuctionManager).
+**Description**: Sets the controller address for a specific token (typically the AuctionManager). Can be called by admin OR trusted factory.
 
-**Access**: Admin only  
+**Access**: Admin or Trusted Factory  
 **Parameters:**
 - `tokenId`: Token ID to set controller for
-- `controller`: Address of the controller
+- `controller`: Address of the controller (cannot be zero address)
+
+**Requirements:**
+- Caller must be admin OR trustedFactory
+- Controller address must not be zero
 
 **Example:**
 ```solidity
+// Called by admin
 nft.setController(1, auctionManagerAddress);
+
+// Or called by factory during auction creation
+factory.createAuction(...); // Factory calls setController internally
 ```
 
 ```bash
 cast send <NFT_ADDRESS> "setController(uint256,address)" 1 <AUCTION_ADDRESS> \
+    --private-key $PRIVATE_KEY \
+    --rpc-url base_sepolia
+```
+
+---
+
+#### setFactory
+```solidity
+function setFactory(address _factory) external onlyAdmin
+```
+
+**Description**: Sets the trusted factory contract that can call setController(). Can only be called once when trustedFactory is address(0).
+
+**Access**: Admin only  
+**Parameters:**
+- `_factory`: Factory contract address
+
+**Requirements:**
+- Can only be called once (when trustedFactory is zero address)
+- Factory address must not be zero
+- Only admin can call
+
+**Security:**
+- Factory address is immutable after first set
+- Enables factory-based auction creation
+- Factory can set controllers but not modify metadata
+
+**Example:**
+```solidity
+// Set factory once during infrastructure deployment
+nft.setFactory(factoryAddress);
+
+// Cannot be called again - will revert with "Factory already set"
+```
+
+```bash
+cast send <NFT_ADDRESS> "setFactory(address)" <FACTORY_ADDRESS> \
     --private-key $PRIVATE_KEY \
     --rpc-url base_sepolia
 ```
@@ -210,13 +263,17 @@ cast call <NFT_ADDRESS> "tokenURI(uint256)" 1 --rpc-url base_sepolia
 ### Events
 
 ```solidity
+event FactorySet(address indexed factory);
 event ControllerSet(uint256 indexed tokenId, address indexed controller);
-event BaseURISet(uint256 indexed tokenId, string uri);
-event Phase1URISet(uint256 indexed tokenId, string uri);
-event Phase2URISet(uint256 indexed tokenId, string uri);
-event Phase3URISet(uint256 indexed tokenId, string uri);
-event PhaseAdvanced(uint256 indexed tokenId, uint8 newPhase);
+event PhaseURIUpdated(uint256 indexed tokenId, uint8 indexed phase, string uri);
+event PhaseAdvanced(uint256 indexed tokenId, uint8 indexed newPhase, address indexed caller);
 ```
+
+**Event Descriptions:**
+- `FactorySet`: Emitted when trusted factory is set (one-time only)
+- `ControllerSet`: Emitted when controller is set for a token
+- `PhaseURIUpdated`: Emitted when metadata URI is updated for a phase
+- `PhaseAdvanced`: Emitted when token advances to next phase
 
 ---
 
@@ -682,7 +739,10 @@ event EmergencyNFTWithdrawal(uint256 indexed tokenId, address indexed to);
 
 ## AuctionFactory
 
-Factory contract for deploying independent AuctionManager instances.
+Factory contract for deploying independent AuctionManager instances with shared infrastructure (NFT contract and payment token).
+
+**Architecture**: Deploy once per network, create multiple auctions via `createAuction()`  
+**Pattern**: Factory owns NFT temporarily → deploys auction → sets controller → transfers NFT atomically
 
 | Network | Address |
 |---------|---------|
@@ -690,13 +750,46 @@ Factory contract for deploying independent AuctionManager instances.
 | Base Mainnet | [0x57cdf2cdeae3f54e598e8def3583a251fec0eaf7](https://basescan.org/address/0x57cdf2cdeae3f54e598e8def3583a251fec0eaf7) |
 | Arc Testnet | [0x57cdf2cdeae3f54e598e8def3583a251fec0eaf7](https://testnet.arcscan.io/address/0x57cdf2cdeae3f54e598e8def3583a251fec0eaf7) |
 
+### State Variables
+
+```solidity
+HouseNFT public immutable nftContract;      // Shared NFT contract for all auctions
+IERC20 public immutable paymentToken;        // Shared payment token (e.g., USDC)
+address[] public auctions;                   // Array of all created auctions
+```
+
 ### Constructor
 
 ```solidity
-constructor() Ownable(msg.sender)
+constructor(
+    address initialOwner,
+    address _nftContract,
+    address _paymentToken
+) Ownable(initialOwner)
 ```
 
-**Description**: Initializes the factory contract with deployer as owner.
+**Description**: Initializes the factory with shared infrastructure references.
+
+**Parameters:**
+- `initialOwner`: Owner address for factory (can deploy auctions)
+- `_nftContract`: HouseNFT contract address (immutable)
+- `_paymentToken`: Payment token address (immutable, e.g., USDC)
+
+**Requirements:**
+- Both addresses must be non-zero
+- NFT contract must have factory set as trusted via `setFactory()`
+
+**Example:**
+```solidity
+AuctionFactory factory = new AuctionFactory(
+    ownerAddress,
+    nftAddress,      // ZBRICKS NFT
+    usdcAddress      // Payment token
+);
+
+// After deployment, set factory as trusted in NFT contract
+nft.setFactory(address(factory));
+```
 
 ### Functions
 
@@ -704,8 +797,6 @@ constructor() Ownable(msg.sender)
 ```solidity
 function createAuction(
     address _admin,
-    address _paymentToken,
-    address _nftContract,
     uint256 _tokenId,
     uint256[4] memory _phaseDurations,
     uint256 _floorPrice,
@@ -716,49 +807,71 @@ function createAuction(
 ) external onlyOwner returns (address)
 ```
 
-**Description**: Deploys a new independent AuctionManager instance with participation fee and treasury.
+**Description**: Deploys a new independent AuctionManager instance using the factory's immutable NFT and payment token. Performs atomic operations: verify ownership → deploy auction → set controller → transfer NFT.
 
 **Access**: Owner only  
 **Parameters:**
-- `_admin`: Owner address for the new auction
-- `_paymentToken`: Payment token contract address (e.g., USDC, DAI)
-- `_nftContract`: HouseNFT contract address
-- `_tokenId`: Token ID to auction
-- `_phaseDurations`: Array of 3 phase durations in seconds (each must be > 0)
-- `_floorPrice`: Minimum first bid amount
-- `_minBidIncrementPercent`: Min increment percentage (1-100)
+- `_admin`: Owner address for the new auction (controls phases/pausing)
+- `_tokenId`: Token ID to auction (must be owned by factory)
+- `_phaseDurations`: Array of 4 phase durations `[phase0, phase1, phase2, 0]` in seconds
+- `_floorPrice`: Minimum first bid amount (in payment token decimals)
+- `_minBidIncrementPercent`: Min increment percentage (1-100, e.g., 5 = 5%)
 - `_enforceMinIncrement`: Whether to enforce minimum increment
-- `_participationFee`: One-time fee to participate (can be 0)
+- `_participationFee`: One-time fee to participate (can be 0, sent to treasury)
 - `_treasury`: Address that receives participation fees and winning bid
 
 **Returns**: Address of the newly deployed AuctionManager
 
 **Requirements:**
-- NFT must be owned by the factory before calling (will be transferred to auction)
+- Factory must own the NFT (call `nft.mintTo(factory)` first)
+- Factory must be set as trusted in NFT contract
 - Treasury address cannot be zero address
+- Phase durations must be valid
+
+**Atomic Operations:**
+1. ✅ Verify factory owns NFT
+2. ✅ Deploy new AuctionManager
+3. ✅ Set controller: `nftContract.setController(tokenId, auctionAddress)`
+4. ✅ Transfer NFT: `nftContract.transferFrom(factory, auction, tokenId)`
+5. ✅ Add to auctions array and emit event
+
+**Note**: Uses immutable `nftContract` and `paymentToken` from factory state (no longer passed as parameters)
 
 **Example:**
 ```solidity
-uint256[4] memory durations = [86400, 86400, 86400, 0]; // 1 day each
+// Prerequisites:
+// 1. Mint NFT to factory
+uint256 tokenId = nft.mintTo(address(factory));
+
+// 2. Set phase URIs
+string[4] memory uris = [...];
+nft.setPhaseURIs(tokenId, uris);
+
+// 3. Create auction
+uint256[4] memory durations = [
+    7 days,   // Phase 0: Open
+    14 days,  // Phase 1: Bidding
+    30 days,  // Phase 2: Execution
+    0         // Phase 3: Completed
+];
+
 address auction = factory.createAuction(
-    adminAddress,
-    usdcAddress,
-    nftAddress,
-    1,                    // tokenId
-    durations,
-    1000000000,          // 1,000 USDC floor
-    5,                   // 5% increment
-    true,                // Enforce increment
-    10000000,            // 10 USDC participation fee
-    treasuryAddress      // Treasury receives fees and winning bid
+    adminAddress,      // Auction admin
+    tokenId,          // Token to auction
+    durations,        // Phase durations
+    10_000_000 * 10**6,  // $10M floor (USDC decimals)
+    5,                // 5% min increment
+    true,             // Enforce increment
+    1000 * 10**6,     // $1000 participation fee
+    treasuryAddress   // Treasury (Gnosis Safe)
 );
 ```
 
 ```bash
-cast send <FACTORY_ADDRESS> "createAuction(address,address,uint256,uint256[4],uint256,uint256,bool)" \
-    <PAYMENT_TOKEN> <NFT_ADDRESS> 1 "[86400,86400,86400,0]" 1000000000 5 true \
-    --private-key $PRIVATE_KEY \
-    --rpc-url base_sepolia
+# Example: Create auction with CreateAuction.s.sol script
+forge script script/CreateAuction.s.sol:CreateAuction \
+    --rpc-url base_sepolia \
+    --broadcast
 ```
 
 ### View Functions
@@ -818,6 +931,118 @@ event AuctionCreated(
     address treasury,
     uint256 timestamp
 );
+```
+
+---
+
+## Deployment Workflow
+
+### Infrastructure Deployment (Once Per Network)
+
+Deploy the shared infrastructure using `DeployFactory.s.sol`:
+
+```bash
+# Set environment variables
+export PRIVATE_KEY=0x...
+export USDC_ADDRESS=0x...  # See network-specific addresses below
+
+# Deploy to network
+forge script script/DeployFactory.s.sol:DeployFactory \
+    --rpc-url <network_name> \
+    --broadcast \
+    --verify
+
+# Save deployed addresses
+export NFT_ADDRESS=<deployed_housenft_address>
+export FACTORY_ADDRESS=<deployed_factory_address>
+```
+
+**What Gets Deployed:**
+1. `HouseNFT` ("ZBRICKS", "ZBR")
+2. `AuctionFactory` (with immutable NFT and payment token references)
+3. Factory is automatically set as trusted in NFT contract
+
+**Output:** Infrastructure ready for creating multiple auctions
+
+---
+
+### Per-Auction Deployment
+
+Create individual auctions using `CreateAuction.s.sol`:
+
+**Step 1: Update Configuration**
+
+Edit [script/CreateAuction.s.sol](script/CreateAuction.s.sol):
+```solidity
+// Auction parameters
+uint256 public constant FLOOR_PRICE = 10_000_000 * 10**6;  // $10M
+uint256 public constant OPEN_DURATION = 7 days;
+uint256 public constant BIDDING_DURATION = 14 days;
+uint256 public constant EXECUTION_PERIOD = 30 days;
+uint256 public constant PARTICIPATION_FEE = 1000 * 10**6;  // $1000
+address public constant TREASURY = 0x...;  // Gnosis Safe
+address public constant ADMIN = 0x...;     // Or use deployer
+
+// Phase metadata URIs (IPFS)
+string public constant PHASE_0_URI = "ipfs://Qm.../phase0.json";
+string public constant PHASE_1_URI = "ipfs://Qm.../phase1.json";
+string public constant PHASE_2_URI = "ipfs://Qm.../phase2.json";
+string public constant PHASE_3_URI = "ipfs://Qm.../phase3.json";
+```
+
+**Step 2: Deploy Auction**
+
+```bash
+# Ensure NFT_ADDRESS and FACTORY_ADDRESS are set
+forge script script/CreateAuction.s.sol:CreateAuction \
+    --rpc-url <network_name> \
+    --broadcast
+```
+
+**What Happens:**
+1. Mints new NFT to factory (`tokenId` auto-increments)
+2. Sets all 4 phase URIs for metadata reveals
+3. Factory creates auction atomically:
+   - Verifies ownership
+   - Deploys AuctionManager
+   - Sets controller
+   - Transfers NFT to auction
+4. Returns auction address
+
+**Output:** Independent auction ready for bidding
+
+---
+
+### Example: Full Deployment
+
+```bash
+# 1. Deploy infrastructure on Base Sepolia
+export PRIVATE_KEY=0xabc...
+export USDC_ADDRESS=0x036CbD53842c5426634e7929541eC2318f3dCF7e
+
+forge script script/DeployFactory.s.sol:DeployFactory \
+    --rpc-url base_sepolia \
+    --broadcast
+
+# Save addresses
+export NFT_ADDRESS=0xe23157f7d8ad43bfcf7aaff64257fd0fa17177d6
+export FACTORY_ADDRESS=0xd3390e5fec170d7577c850f5687a6542b66a4bbd
+
+# 2. Create first auction (Property #1)
+# Update CreateAuction.s.sol with property details
+forge script script/CreateAuction.s.sol:CreateAuction \
+    --rpc-url base_sepolia \
+    --broadcast
+
+# Auction created at: 0x3347f6a853e04281daa0314f49a76964f010366f
+
+# 3. Create second auction (Property #2)
+# Update CreateAuction.s.sol with new property details
+forge script script/CreateAuction.s.sol:CreateAuction \
+    --rpc-url base_sepolia \
+    --broadcast
+
+# Each auction is independent with own parameters
 ```
 
 ---
